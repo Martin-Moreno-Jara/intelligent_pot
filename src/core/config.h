@@ -52,26 +52,49 @@
 #define IRRIGATION_MAX_MS          8000    // seguridad: nunca regar más que esto
 #define IRRIGATION_COOLDOWN_MS     30000   // tiempo mínimo entre riegos
 
-// -------- Conectividad: WiFi -------------------------------------------------
-#define WIFI_SSID             "TU_SSID"
-#define WIFI_PASSWORD         "TU_PASSWORD"
-#define WIFI_CONNECT_TIMEOUT_MS 20000
+// -------- Conectividad: WiFi (aprovisionamiento por portal cautivo) ---------
+// Las credenciales NO están hardcodeadas. Al primer boot (o si las guardadas
+// fallan) el ESP32 levanta un AP propio con un portal web; las credenciales
+// recibidas se persisten en NVS (Preferences) y se reutilizan en los
+// siguientes boots.
+#define AP_SSID                  "Matera-Setup"
+#define AP_PASSWORD              "matera1234"     // >=8 chars; "" = AP abierto
+#define WIFI_CONNECT_TIMEOUT_MS  20000
+#define WIFI_NVS_NAMESPACE       "matera"         // Preferences namespace
+#define WIFI_NVS_KEY_SSID        "ssid"
+#define WIFI_NVS_KEY_PASS        "pass"
 
-// -------- MQTT ---------------------------------------------------------------
-#define MQTT_HOST             "broker.hivemq.com"
-#define MQTT_PORT             1883
-#define MQTT_USER             ""
-#define MQTT_PASS             ""
-#define MQTT_CLIENT_ID        "matera-esp32-s3"
-#define MQTT_TOPIC_CMD_PLAY   "cmnd/matera/play"
-#define MQTT_TOPIC_CMD_WATER  "cmnd/matera/water"
-#define MQTT_TOPIC_STAT       "stat/matera/sensors"
-#define MQTT_PUBLISH_PERIOD_MS 5000
+// Alto rendimiento para entornos con muchas redes 2.4 GHz:
+//   * potencia TX al máximo
+//   * power-save desactivado durante scan / autenticación / DHCP
+#define WIFI_TX_POWER            WIFI_POWER_19_5dBm   // 19.5 dBm = máximo
 
-// -------- ThingSpeak ---------------------------------------------------------
-#define THINGSPEAK_API_KEY    "TU_WRITE_API_KEY"
-#define THINGSPEAK_CHANNEL_ID 0000000UL
-#define THINGSPEAK_PERIOD_MS  20000   // rate limit free: >=15s
+// -------- MQTT: ThingSpeak como ÚNICO broker --------------------------------
+// Generar un "MQTT Device" en https://thingspeak.com/devices/mqtt y pegar
+// abajo las credenciales que ThingSpeak devuelve. El canal asociado recibirá
+// los datos por channels/<id>/publish y emitirá comandos por
+// channels/<id>/subscribe/fields/fieldN.
+#define MQTT_HOST                  "mqtt3.thingspeak.com"
+#define MQTT_PORT                  1883
+#define THINGSPEAK_MQTT_CLIENT_ID  "PEGAR_CLIENT_ID"
+#define THINGSPEAK_MQTT_USER       "PEGAR_USERNAME"
+#define THINGSPEAK_MQTT_PASS       "PEGAR_PASSWORD"
+#define THINGSPEAK_CHANNEL_ID      0000000UL
+
+// Asignación de campos del canal (1..8). field1..6 = sensores publicados.
+// field7..8 = comandos remotos: el ESP32 se suscribe y reacciona cuando
+// alguien escribe en ellos desde ThingSpeak / app / API REST.
+#define TS_FIELD_SOIL              1
+#define TS_FIELD_TEMP              2
+#define TS_FIELD_HUM               3
+#define TS_FIELD_PRES              4
+#define TS_FIELD_LUX               5
+#define TS_FIELD_PPM               6
+#define TS_FIELD_CMD_PLAY          7    // payload "1" -> reproducir melodía
+#define TS_FIELD_CMD_WATER         8    // payload "1" -> regar; "0" -> stop
+
+// Período entre publicaciones (rate limit ThingSpeak free >= 15 s).
+#define MQTT_PUBLISH_PERIOD_MS     20000
 
 // -------- Tareas FreeRTOS: stack y prioridad ---------------------------------
 #define TASK_STACK_SENSORS    4096
@@ -80,7 +103,6 @@
 #define TASK_STACK_LED        3072
 #define TASK_STACK_DISPLAY    4096
 #define TASK_STACK_MQTT       6144
-#define TASK_STACK_THINGSPEAK 6144
 
 #define PRIO_LOW              1
 #define PRIO_MEDIUM           2

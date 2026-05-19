@@ -19,7 +19,7 @@
 // ----- Estructuras de mensaje ------------------------------------------------
 
 // Snapshot de todos los sensores. Producido por TaskSensors, consumido por
-// TaskIrrigation, TaskLED, TaskDisplay, TaskMQTT, TaskThingSpeak.
+// TaskIrrigation, TaskLED, TaskDisplay y TaskMQTT.
 struct SensorData {
   float    soilMoisturePct;   // 0..100
   uint16_t soilRaw;           // ADC bruto (para debug)
@@ -72,7 +72,6 @@ extern TaskHandle_t hTaskAudio;
 extern TaskHandle_t hTaskLED;
 extern TaskHandle_t hTaskDisplay;
 extern TaskHandle_t hTaskMQTT;
-extern TaskHandle_t hTaskThingSpeak;
 
 // ----- API: crear primitivas y lanzar tareas ---------------------------------
 void tasks_initPrimitives();   // crea colas, mutex, event group

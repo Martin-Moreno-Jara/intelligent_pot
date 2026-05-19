@@ -31,7 +31,6 @@ TaskHandle_t hTaskAudio      = nullptr;
 TaskHandle_t hTaskLED        = nullptr;
 TaskHandle_t hTaskDisplay    = nullptr;
 TaskHandle_t hTaskMQTT       = nullptr;
-TaskHandle_t hTaskThingSpeak = nullptr;
 
 // =============================================================================
 // tasks_initPrimitives
@@ -69,10 +68,11 @@ void tasks_startAll() {
                           nullptr, PRIO_LOW,    &hTaskLED,        1);
   xTaskCreatePinnedToCore(taskDisplay,    "Display",    TASK_STACK_DISPLAY,
                           nullptr, PRIO_LOW,    &hTaskDisplay,    1);
+  // Una sola tarea de red: ThingSpeak es ahora el único broker MQTT, así que
+  // tanto la publicación de sensores como la recepción de comandos pasan por
+  // taskMQTT (anclada al core 0, junto al stack WiFi).
   xTaskCreatePinnedToCore(taskMQTT,       "MQTT",       TASK_STACK_MQTT,
                           nullptr, PRIO_MEDIUM, &hTaskMQTT,       0);
-  xTaskCreatePinnedToCore(taskThingSpeak, "ThingSpeak", TASK_STACK_THINGSPEAK,
-                          nullptr, PRIO_LOW,    &hTaskThingSpeak, 0);
 }
 
 // =============================================================================
