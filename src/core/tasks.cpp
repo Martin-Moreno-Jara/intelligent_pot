@@ -10,6 +10,7 @@
 #include "../ui/leds.h"
 #include "../ui/display.h"
 #include "../network/network.h"
+#include "../network/web_dashboard.h"
 #include <stdarg.h>
 
 // ----- Colas -----------------------------------------------------------------
@@ -31,6 +32,7 @@ TaskHandle_t hTaskAudio      = nullptr;
 TaskHandle_t hTaskLED        = nullptr;
 TaskHandle_t hTaskDisplay    = nullptr;
 TaskHandle_t hTaskMQTT       = nullptr;
+TaskHandle_t hTaskDashboard  = nullptr;
 
 // =============================================================================
 // tasks_initPrimitives
@@ -73,6 +75,10 @@ void tasks_startAll() {
   // taskMQTT (anclada al core 0, junto al stack WiFi).
   xTaskCreatePinnedToCore(taskMQTT,       "MQTT",       TASK_STACK_MQTT,
                           nullptr, PRIO_MEDIUM, &hTaskMQTT,       0);
+  // Dashboard local: WebServer en la IP de la STA. Mismo core que el stack
+  // WiFi para evitar trasiego entre cores en cada request.
+  xTaskCreatePinnedToCore(taskDashboard,  "Dashboard",  TASK_STACK_DASHBOARD,
+                          nullptr, PRIO_LOW,    &hTaskDashboard,  0);
 }
 
 // =============================================================================

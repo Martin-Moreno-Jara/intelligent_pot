@@ -8,7 +8,9 @@
 //     power-save) durante scan/autenticación para entornos con muchas redes.
 //   * MQTT: ThingSpeak es el ÚNICO broker. Publica sensores en
 //     channels/<id>/publish y se suscribe a channels/<id>/subscribe/fields/N
-//     para los comandos remotos.
+//     para los comandos remotos. ThingSpeak se usa SÓLO como almacenamiento
+//     histórico remoto: el dashboard interactivo se sirve localmente desde
+//     este mismo ESP (ver web_dashboard.h).
 // =============================================================================
 
 #include "../core/tasks.h"

@@ -6,7 +6,8 @@
 
 #include <Arduino.h>
 
-// -------- I2C (compartido por AHT20, BMP280, BH1750 y OLED SSD1306) ----------
+// -------- I2C (compartido por AHT20, BMP280 y BH1750) ------------------------
+// El display ya no usa I2C: la nueva pantalla TFT 1.3" ST7789 va por SPI.
 #define PIN_I2C_SDA           8
 #define PIN_I2C_SCL           9
 #define I2C_FREQ_HZ           400000
@@ -39,12 +40,21 @@
 #define I2S_SAMPLE_RATE       22050
 #define I2S_PORT_NUM          0    // I2S_NUM_0
 
-// -------- Display OLED -------------------------------------------------------
-#define OLED_WIDTH            128
-#define OLED_HEIGHT           64
-#define OLED_I2C_ADDR         0x3C
-#define OLED_RESET_PIN        -1
-#define DISPLAY_PAGE_PERIOD_MS 4000  // rotación de pantallas
+// -------- Display TFT a color (ST7789 1.3" 240x240, SPI) ---------------------
+// Los módulos 1.3" típicos no exponen pin CS (lo llevan a GND internamente);
+// si tu placa sí lo tiene, definí TFT_PIN_CS al pin correspondiente. Usar -1
+// le indica a Adafruit_ST7789 que no controle CS.
+#define TFT_WIDTH             240
+#define TFT_HEIGHT            240
+#define TFT_PIN_SCLK          18
+#define TFT_PIN_MOSI          21   // SDA del módulo
+#define TFT_PIN_DC            6
+#define TFT_PIN_RST           7
+#define TFT_PIN_CS            -1   // -1 si el módulo no expone CS
+#define TFT_PIN_BLK           -1   // -1 si BLK va atado a 3V3; o un GPIO PWM
+#define TFT_SPI_FREQ_HZ       40000000UL  // 40 MHz, seguro con cables cortos
+#define TFT_ROTATION          2           // 0..3; ajustar si el texto sale al revés
+#define DISPLAY_PAGE_PERIOD_MS 4000        // rotación de pantallas
 
 // -------- Lógica de riego ----------------------------------------------------
 #define SOIL_MOISTURE_TRIGGER_PCT  35.0f   // por debajo de esto -> regar
@@ -96,6 +106,13 @@
 // Período entre publicaciones (rate limit ThingSpeak free >= 15 s).
 #define MQTT_PUBLISH_PERIOD_MS     20000
 
+// -------- Dashboard local (servidor web en el ESP) ---------------------------
+// El ESP corre un servidor HTTP en su IP de STA (la IP que le asigne el router)
+// para mostrar un dashboard local con las lecturas actuales de los sensores.
+// El navegador del usuario sondea /api/sensors y refresca la vista.
+#define WEB_DASHBOARD_PORT         80
+#define WEB_DASHBOARD_REFRESH_MS   2000  // intervalo de polling del cliente JS
+
 // -------- Tareas FreeRTOS: stack y prioridad ---------------------------------
 #define TASK_STACK_SENSORS    4096
 #define TASK_STACK_IRRIGATION 3072
@@ -103,6 +120,7 @@
 #define TASK_STACK_LED        3072
 #define TASK_STACK_DISPLAY    4096
 #define TASK_STACK_MQTT       6144
+#define TASK_STACK_DASHBOARD  6144
 
 #define PRIO_LOW              1
 #define PRIO_MEDIUM           2

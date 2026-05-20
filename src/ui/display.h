@@ -1,7 +1,7 @@
 #pragma once
 // =============================================================================
-// display.h — OLED SSD1306 128x64, rotación automática de páginas.
-// Comparte el bus I2C con los sensores; protegido con mtxI2C.
+// display.h — TFT a color 1.3" (ST7789, 240x240) por SPI dedicado.
+// Ya NO comparte bus con los sensores: no se toma mtxI2C.
 // =============================================================================
 
 #include "../core/tasks.h"
