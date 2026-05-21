@@ -86,10 +86,10 @@
 // channels/<id>/subscribe/fields/fieldN.
 #define MQTT_HOST                  "mqtt3.thingspeak.com"
 #define MQTT_PORT                  1883
-#define THINGSPEAK_MQTT_CLIENT_ID  "PEGAR_CLIENT_ID"
-#define THINGSPEAK_MQTT_USER       "PEGAR_USERNAME"
-#define THINGSPEAK_MQTT_PASS       "PEGAR_PASSWORD"
-#define THINGSPEAK_CHANNEL_ID      0000000UL
+#define THINGSPEAK_MQTT_CLIENT_ID  "HTkVOy45LTIXABgjOAwFDQc"
+#define THINGSPEAK_MQTT_USER       "HTkVOy45LTIXABgjOAwFDQc"
+#define THINGSPEAK_MQTT_PASS       "f/9Pnwyva5BE7pYnacLjVKAe"
+#define THINGSPEAK_CHANNEL_ID      3389743
 
 // Asignación de campos del canal (1..8). field1..6 = sensores publicados.
 // field7..8 = comandos remotos: el ESP32 se suscribe y reacciona cuando
