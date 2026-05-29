@@ -9,8 +9,7 @@
 //   * MQTT: HiveMQ Cloud (TLS) es el ÚNICO broker. Publica los sensores en
 //     formato JSON en MQTT_TOPIC_SENSORS y se suscribe a MQTT_TOPIC_CMD_PUMP y
 //     MQTT_TOPIC_CMD_PLAY para los comandos remotos que envía la Raspberry Pi.
-//     La Raspberry Pi se suscribe a los sensores y sirve el dashboard web
-//     remoto; este ESP además mantiene su propio dashboard local (web_dashboard.h).
+//     El dashboard web lo sirve exclusivamente la Raspberry Pi.
 // =============================================================================
 
 #include "../core/tasks.h"

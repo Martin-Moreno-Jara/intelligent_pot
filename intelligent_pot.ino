@@ -17,7 +17,6 @@
 #include "src/ui/leds.h"
 #include "src/ui/display.h"
 #include "src/network/network.h"
-#include "src/network/web_dashboard.h"
 
 void setup() {
   Serial.begin(115200);
@@ -51,24 +50,9 @@ void setup() {
   //    credenciales válidas. Al retornar, la STA está asociada y tenemos IP.
   network_initWiFi();
 
-  // Imprimir la IP asignada por el router para que el usuario pueda abrir
-  // el dashboard local desde su navegador.
-  IPAddress ip = WiFi.localIP();
-  Serial.print("[net] IP local asignada: ");
-  Serial.println(ip);
-  Serial.print("[net] Dashboard: http://");
-  Serial.print(ip);
-  if (WEB_DASHBOARD_PORT != 80) {
-    Serial.print(":");
-    Serial.print(WEB_DASHBOARD_PORT);
-  }
-  Serial.println("/");
-  logf("[net] STA conectada IP=%s dashboard=http://%s:%u/",
-       ip.toString().c_str(), ip.toString().c_str(),
-       (unsigned)WEB_DASHBOARD_PORT);
+  logf("[net] STA conectada. IP=%s", WiFi.localIP().toString().c_str());
 
-  // 4) Lanzar todas las tareas FreeRTOS (incluye dashboard local + MQTT a
-  //    ThingSpeak; ambas conviven sobre la misma asociación WiFi).
+  // 4) Lanzar todas las tareas FreeRTOS.
   tasks_startAll();
 
   Serial.println("===== Setup completo, FreeRTOS en marcha =====");

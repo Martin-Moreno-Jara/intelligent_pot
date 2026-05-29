@@ -245,22 +245,12 @@ static void renderPage(uint8_t page, const SensorData& s, bool haveData,
       tft.setTextSize(1);
       tft.setCursor(10, CONTENT_Y + 84);
       tft.setTextColor(COL_MUTED);
-      tft.print("Dashboard");
+      tft.print("Broker MQTT");
 
-      tft.setTextSize(2);
+      tft.setTextSize(1);
       tft.setCursor(10, CONTENT_Y + 100);
       tft.setTextColor(wifiOk ? COL_ACCENT : COL_MUTED);
-      if (wifiOk) {
-        String url = "http://" + WiFi.localIP().toString();
-        if (WEB_DASHBOARD_PORT != 80) {
-          url += ":";
-          url += String((unsigned)WEB_DASHBOARD_PORT);
-        }
-        url += "/";
-        tft.print(url);
-      } else {
-        tft.print("(sin WiFi)");
-      }
+      tft.print(MQTT_HOST);
 
       tft.setTextSize(1);
       tft.setCursor(10, CONTENT_Y + 140);

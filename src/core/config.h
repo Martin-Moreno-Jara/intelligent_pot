@@ -148,13 +148,6 @@
 // Período entre publicaciones de sensores (HiveMQ no impone rate limit).
 #define MQTT_PUBLISH_PERIOD_MS     5000
 
-// -------- Dashboard local (servidor web en el ESP) ---------------------------
-// El ESP corre un servidor HTTP en su IP de STA (la IP que le asigne el router)
-// para mostrar un dashboard local con las lecturas actuales de los sensores
-// y los controles (riego manual, canción de riego, umbral, brillo NeoPixel).
-#define WEB_DASHBOARD_PORT         80
-#define WEB_DASHBOARD_REFRESH_MS   2000  // intervalo de polling del cliente JS
-
 // -------- Tareas FreeRTOS: stack y prioridad ---------------------------------
 #define TASK_STACK_SENSORS    4096
 #define TASK_STACK_IRRIGATION 3072
@@ -163,7 +156,6 @@
 #define TASK_STACK_LED        3072
 #define TASK_STACK_DISPLAY    4096
 #define TASK_STACK_MQTT       6144
-#define TASK_STACK_DASHBOARD  6144
 
 #define PRIO_LOW              1
 #define PRIO_MEDIUM           2

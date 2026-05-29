@@ -72,7 +72,6 @@ extern TaskHandle_t hTaskServo;
 extern TaskHandle_t hTaskLED;
 extern TaskHandle_t hTaskDisplay;
 extern TaskHandle_t hTaskMQTT;
-extern TaskHandle_t hTaskDashboard;
 
 // ----- API: crear primitivas y lanzar tareas ---------------------------------
 void tasks_initPrimitives();   // crea colas, mutex, event group
