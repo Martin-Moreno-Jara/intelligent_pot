@@ -17,6 +17,8 @@
 // =============================================================================
 #include "network.h"
 #include "../core/config.h"
+#include "../core/settings.h"
+#include "../storage/sd_store.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include <WebServer.h>
@@ -253,8 +255,13 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
 
   if (strcmp(topic, s_topicSubPlay) == 0) {
     if (atoi(buf) != 0) {
-      AudioCmd cmd = AUDIO_CMD_PLAY_ALERT;
-      xQueueSend(qAudioCmd, &cmd, 0);
+      // Reproducir la canción de riego configurada; si no hay, la primera de
+      // la SD (si existe alguna).
+      RuntimeSettings st;
+      settings_get(st);
+      int idx = (st.wateringSongIndex >= 0) ? st.wateringSongIndex
+                                            : (sd_songCount() > 0 ? 0 : -1);
+      if (idx >= 0) xQueueSend(qAudioCmd, &idx, 0);
     }
   } else if (strcmp(topic, s_topicSubWater) == 0) {
     IrrigationCmd cmd = (atoi(buf) != 0)

@@ -7,6 +7,7 @@
 #include "../sensors/sensors.h"
 #include "../actuators/irrigation.h"
 #include "../actuators/audio.h"
+#include "../actuators/servo360.h"
 #include "../ui/leds.h"
 #include "../ui/display.h"
 #include "../network/network.h"
@@ -29,6 +30,7 @@ EventGroupHandle_t evtSystem = nullptr;
 TaskHandle_t hTaskSensors    = nullptr;
 TaskHandle_t hTaskIrrigation = nullptr;
 TaskHandle_t hTaskAudio      = nullptr;
+TaskHandle_t hTaskServo      = nullptr;
 TaskHandle_t hTaskLED        = nullptr;
 TaskHandle_t hTaskDisplay    = nullptr;
 TaskHandle_t hTaskMQTT       = nullptr;
@@ -43,7 +45,7 @@ void tasks_initPrimitives() {
   // xQueuePeek (no destructiva) para multi-consumidor.
   qSensorData    = xQueueCreate(1, sizeof(SensorData));
   qIrrigationCmd = xQueueCreate(4, sizeof(IrrigationCmd));
-  qAudioCmd      = xQueueCreate(4, sizeof(AudioCmd));
+  qAudioCmd      = xQueueCreate(8, sizeof(int));
 
   mtxI2C    = xSemaphoreCreateMutex();
   mtxSerial = xSemaphoreCreateMutex();
@@ -64,8 +66,14 @@ void tasks_startAll() {
                           nullptr, PRIO_MEDIUM, &hTaskSensors,    1);
   xTaskCreatePinnedToCore(taskIrrigation, "Irrigation", TASK_STACK_IRRIGATION,
                           nullptr, PRIO_HIGH,   &hTaskIrrigation, 1);
+  // Audio: prioridad más alta para que el decodificador MP3 no se corte.
+  // Anclado al core 1 (app core) para aislarlo del stack WiFi/MQTT del core 0;
+  // lee la SD por su bus HSPI propio.
   xTaskCreatePinnedToCore(taskAudio,      "Audio",      TASK_STACK_AUDIO,
-                          nullptr, PRIO_HIGH,   &hTaskAudio,      1);
+                          nullptr, PRIO_HIGHER, &hTaskAudio,      1);
+  // Servo de rotación continua: tarea liviana, core 1.
+  xTaskCreatePinnedToCore(taskServo,      "Servo",      TASK_STACK_SERVO,
+                          nullptr, PRIO_LOW,    &hTaskServo,      1);
   xTaskCreatePinnedToCore(taskLED,        "LED",        TASK_STACK_LED,
                           nullptr, PRIO_LOW,    &hTaskLED,        1);
   xTaskCreatePinnedToCore(taskDisplay,    "Display",    TASK_STACK_DISPLAY,

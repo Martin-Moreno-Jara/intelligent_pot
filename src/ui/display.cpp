@@ -17,17 +17,17 @@
 // =============================================================================
 #include "display.h"
 #include "../core/config.h"
+#include "../core/settings.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <WiFi.h>
 
-// SPI dedicado: en ESP32-S3 usamos HSPI para no chocar con flash. Pasamos un
-// puntero a un SPIClass propio para que Adafruit_ST7789 no toque el SPI por
-// defecto.
-static SPIClass    s_tftSpi(HSPI);
-static Adafruit_ST7789 tft(&s_tftSpi, TFT_PIN_CS, TFT_PIN_DC, TFT_PIN_RST);
+// El TFT usa el bus SPI POR DEFECTO (FSPI), igual que el código de prueba; así
+// el HSPI queda libre para la microSD del audio. CS y backlight ahora SÍ están
+// cableados (pines 15 y 16). El constructor sin SPIClass usa el objeto global SPI.
+static Adafruit_ST7789 tft(TFT_PIN_CS, TFT_PIN_DC, TFT_PIN_RST);
 static bool s_ready = false;
 
 // Paleta — colores RGB565 fijos para el tema. Usar #define evita instanciar
@@ -50,14 +50,17 @@ static const int16_t CONTENT_H    = TFT_HEIGHT - CONTENT_Y;
 // Serial.begin pero no requiere I2C ni mutex.
 // =============================================================================
 bool display_init() {
-  s_tftSpi.begin(TFT_PIN_SCLK, /*MISO=*/-1, TFT_PIN_MOSI, TFT_PIN_CS);
-
+  // Backlight encendido (BL = pin 16).
   if (TFT_PIN_BLK >= 0) {
     pinMode(TFT_PIN_BLK, OUTPUT);
     digitalWrite(TFT_PIN_BLK, HIGH);
   }
 
-  tft.init(TFT_WIDTH, TFT_HEIGHT, SPI_MODE3);
+  // Inicia el bus SPI por defecto con los pines del TFT (igual que el test:
+  // SPI.begin(SCL, -1, SDA, CS)).
+  SPI.begin(TFT_PIN_SCLK, /*MISO=*/-1, TFT_PIN_MOSI, TFT_PIN_CS);
+
+  tft.init(TFT_WIDTH, TFT_HEIGHT);
   tft.setSPISpeed(TFT_SPI_FREQ_HZ);
   tft.setRotation(TFT_ROTATION);
   tft.fillScreen(COL_BG);
@@ -165,9 +168,13 @@ static void renderPage(uint8_t page, const SensorData& s, bool haveData,
 
       tft.setTextSize(6);
       tft.setCursor(10, CONTENT_Y + 30);
+      // Color según el umbral vigente (ajustable desde el dashboard): rojo por
+      // debajo, amarillo en el margen justo encima, verde cuando hay holgura.
+      RuntimeSettings rs;
+      settings_get(rs);
       uint16_t col = COL_OK;
-      if (s.soilMoisturePct < SOIL_MOISTURE_TRIGGER_PCT) col = COL_BAD;
-      else if (s.soilMoisturePct < SOIL_MOISTURE_TARGET_PCT) col = COL_WARN;
+      if (s.soilMoisturePct < rs.soilThresholdPct)            col = COL_BAD;
+      else if (s.soilMoisturePct < rs.soilThresholdPct + 15)  col = COL_WARN;
       tft.setTextColor(col);
       tft.print((int)s.soilMoisturePct);
       tft.setTextSize(3);

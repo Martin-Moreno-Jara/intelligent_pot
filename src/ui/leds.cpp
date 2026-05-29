@@ -1,113 +1,65 @@
 // =============================================================================
-// leds.cpp — Animación de los dos anillos NeoPixel.
-// La tarea se ejecuta cada 100 ms; lee el snapshot de sensores con peek y
-// también consulta evtSystem para reaccionar a EVT_IRRIGATING.
+// leds.cpp — Animación decorativa de los dos anillos NeoPixel.
+//
+// Arcoíris HSV que rota: el anillo 1 avanza y el anillo 2 retrocede (desfasados
+// medio círculo), tal como en el código de prueba. El brillo de cada anillo se
+// lee de settings en cada ciclo, así el dashboard puede cambiarlo en caliente
+// e independientemente.
 // =============================================================================
 #include "leds.h"
 #include "../core/config.h"
+#include "../core/settings.h"
 #include <Adafruit_NeoPixel.h>
 
-static Adafruit_NeoPixel ringSoil(NEOPIXEL_COUNT, PIN_NEOPIXEL_SOIL,
-                                  NEO_GRB + NEO_KHZ800);
-static Adafruit_NeoPixel ringEnv (NEOPIXEL_COUNT, PIN_NEOPIXEL_ENV,
-                                  NEO_GRB + NEO_KHZ800);
-
-// -----------------------------------------------------------------------------
-// soilColor — color del nivel de humedad de suelo (0..100%).
-// 0%   = rojo  | 50%  = verde | 100% = azul
-// -----------------------------------------------------------------------------
-static uint32_t soilColor(float pct) {
-  if (pct < 50.0f) {
-    float t = pct / 50.0f;            // 0..1
-    uint8_t r = (uint8_t)((1.0f - t) * 255.0f);
-    uint8_t g = (uint8_t)(t * 255.0f);
-    return Adafruit_NeoPixel::Color(r, g, 0);
-  } else {
-    float t = (pct - 50.0f) / 50.0f;  // 0..1
-    uint8_t g = (uint8_t)((1.0f - t) * 255.0f);
-    uint8_t b = (uint8_t)(t * 255.0f);
-    return Adafruit_NeoPixel::Color(0, g, b);
-  }
-}
-
-// -----------------------------------------------------------------------------
-// envColor — color del estado ambiental.
-// Mezcla calidad del aire (rojo si alto), luz (amarillo) y temperatura.
-// -----------------------------------------------------------------------------
-static uint32_t envColor(const SensorData& s) {
-  // AQI: 400 ppm = bueno; 1500+ = malo.
-  float aqiBad = (s.airQualityPpm - 400.0f) / 1100.0f;
-  if (aqiBad < 0) aqiBad = 0;
-  if (aqiBad > 1) aqiBad = 1;
-  // luz: 0 lx = 0, 1000+ lx = 1
-  float lumNorm = s.lux / 1000.0f;
-  if (lumNorm > 1) lumNorm = 1;
-  // temperatura: 18..32 °C mapeado 0..1
-  float tNorm = (s.tempC - 18.0f) / 14.0f;
-  if (tNorm < 0) tNorm = 0;
-  if (tNorm > 1) tNorm = 1;
-
-  uint8_t r = (uint8_t)(255 * (0.5f * aqiBad + 0.5f * tNorm));
-  uint8_t g = (uint8_t)(255 * (1.0f - aqiBad) * 0.7f);
-  uint8_t b = (uint8_t)(255 * lumNorm * 0.4f);
-  return Adafruit_NeoPixel::Color(r, g, b);
-}
+static Adafruit_NeoPixel aroNeo1(NEOPIXEL_COUNT, PIN_NEOPIXEL_1,
+                                 NEO_GRB + NEO_KHZ800);
+static Adafruit_NeoPixel aroNeo2(NEOPIXEL_COUNT, PIN_NEOPIXEL_2,
+                                 NEO_GRB + NEO_KHZ800);
 
 // =============================================================================
-// leds_init — inicializa ambos anillos.
+// leds_init — arranca ambos anillos con el brillo inicial.
 // =============================================================================
 bool leds_init() {
-  ringSoil.begin();
-  ringEnv.begin();
-  ringSoil.setBrightness(NEOPIXEL_BRIGHTNESS);
-  ringEnv.setBrightness(NEOPIXEL_BRIGHTNESS);
-  ringSoil.clear(); ringSoil.show();
-  ringEnv.clear();  ringEnv.show();
+  aroNeo1.begin();
+  aroNeo2.begin();
+  aroNeo1.setBrightness(NEOPIXEL_BRIGHTNESS);
+  aroNeo2.setBrightness(NEOPIXEL_BRIGHTNESS);
+  aroNeo1.show();
+  aroNeo2.show();
   return true;
 }
 
 // =============================================================================
-// taskLED — Período 100 ms. Renderiza ambos anillos.
+// taskLED — Período 20 ms. Renderiza el arcoíris y aplica el brillo de settings.
 // =============================================================================
 void taskLED(void* arg) {
-  TickType_t lastWake = xTaskGetTickCount();
-  const TickType_t period = pdMS_TO_TICKS(100);
-  SensorData snap{};
-  uint8_t pulse = 0;
-  bool pulseDir = true;
+  uint16_t animDesfase1 = 0;
+  uint16_t animDesfase2 = 32768;   // medio círculo de desfase
+
+  uint8_t prevB1 = 0xFF, prevB2 = 0xFF;
 
   for (;;) {
-    bool haveSnap = (xQueuePeek(qSensorData, &snap, 0) == pdTRUE);
-    bool irrigating =
-        (xEventGroupGetBits(evtSystem) & EVT_IRRIGATING) != 0;
-
-    // ---- Anillo de humedad: gradiente, número de LEDs según % ----
-    ringSoil.clear();
-    if (haveSnap) {
-      int n = (int)((snap.soilMoisturePct / 100.0f) * NEOPIXEL_COUNT + 0.5f);
-      if (n > NEOPIXEL_COUNT) n = NEOPIXEL_COUNT;
-      uint32_t c = soilColor(snap.soilMoisturePct);
-      for (int i = 0; i < n; ++i) ringSoil.setPixelColor(i, c);
-
-      // Si está regando: pulsar el anillo (efecto de "actividad").
-      if (irrigating) {
-        if (pulseDir) { if (++pulse > 200) pulseDir = false; }
-        else          { if (--pulse < 30)  pulseDir = true;  }
-        ringSoil.setBrightness(pulse);
-      } else {
-        ringSoil.setBrightness(NEOPIXEL_BRIGHTNESS);
-      }
+    // Brillo independiente por anillo (ajustable desde el dashboard).
+    RuntimeSettings st;
+    settings_get(st);
+    if (st.neoBrightness1 != prevB1) {
+      aroNeo1.setBrightness(st.neoBrightness1);
+      prevB1 = st.neoBrightness1;
     }
-    ringSoil.show();
-
-    // ---- Anillo ambiental: color sólido mezclado ----
-    ringEnv.clear();
-    if (haveSnap) {
-      uint32_t c = envColor(snap);
-      for (int i = 0; i < NEOPIXEL_COUNT; ++i) ringEnv.setPixelColor(i, c);
+    if (st.neoBrightness2 != prevB2) {
+      aroNeo2.setBrightness(st.neoBrightness2);
+      prevB2 = st.neoBrightness2;
     }
-    ringEnv.show();
 
-    vTaskDelayUntil(&lastWake, period);
+    for (int i = 0; i < NEOPIXEL_COUNT; i++) {
+      aroNeo1.setPixelColor(i, aroNeo1.ColorHSV(animDesfase1 + (i * 65536 / NEOPIXEL_COUNT)));
+      aroNeo2.setPixelColor(i, aroNeo2.ColorHSV(animDesfase2 + (i * 65536 / NEOPIXEL_COUNT)));
+    }
+    aroNeo1.show();
+    aroNeo2.show();
+
+    animDesfase1 += 256;
+    animDesfase2 -= 256;
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }

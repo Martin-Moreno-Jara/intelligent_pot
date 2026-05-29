@@ -40,19 +40,20 @@ enum IrrigationCmd : uint8_t {
   IRR_CMD_STOP         = 2
 };
 
-// Comando de audio enviado a TaskAudio
-enum AudioCmd : uint8_t {
-  AUDIO_CMD_PLAY_WATER = 1,   // melodía cuando inicia el riego
-  AUDIO_CMD_PLAY_ALERT = 2,   // melodía por petición MQTT u alerta
-  AUDIO_CMD_STOP       = 3
-};
+// ----- Comandos de audio (enteros) enviados a TaskAudio ----------------------
+// La cola qAudioCmd transporta un int, igual que el código de prueba:
+//   * idx >= 0           -> reproducir la canción con ese índice (sd_store)
+//   * AUDIO_CMD_STOP     -> detener la reproducción
+//   * AUDIO_VOL_CMD(n)   -> fijar volumen al nivel n (0..AUDIO_VOLUME_MAX)
+#define AUDIO_CMD_STOP    (-1)
+#define AUDIO_VOL_CMD(n)  (-2 - (n))
 
 // ----- Colas (definidas en tasks.cpp) ----------------------------------------
 // qSensorData: longitud 1, usada con xQueueOverwrite/xQueuePeek para
 // distribuir el snapshot más reciente a todos los consumidores sin bloquear.
 extern QueueHandle_t qSensorData;
 extern QueueHandle_t qIrrigationCmd;   // comandos -> TaskIrrigation
-extern QueueHandle_t qAudioCmd;        // comandos -> TaskAudio
+extern QueueHandle_t qAudioCmd;        // comandos (int) -> TaskAudio
 
 // ----- Mutex -----------------------------------------------------------------
 extern SemaphoreHandle_t mtxI2C;       // protege el bus I2C (sensores + OLED)
@@ -69,6 +70,7 @@ extern EventGroupHandle_t evtSystem;
 extern TaskHandle_t hTaskSensors;
 extern TaskHandle_t hTaskIrrigation;
 extern TaskHandle_t hTaskAudio;
+extern TaskHandle_t hTaskServo;
 extern TaskHandle_t hTaskLED;
 extern TaskHandle_t hTaskDisplay;
 extern TaskHandle_t hTaskMQTT;

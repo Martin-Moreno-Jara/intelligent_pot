@@ -1,18 +1,21 @@
 // =============================================================================
 // web_dashboard.cpp — Dashboard local servido por el propio ESP32.
 //
-// El cliente carga / una vez y luego hace polling a /api/sensors cada
-// WEB_DASHBOARD_REFRESH_MS para refrescar los valores. Coexiste con la
-// conexión STA al router doméstico: misma interfaz, distinto puerto al portal
-// cautivo (que sólo vive durante el aprovisionamiento).
+// Además de mostrar las lecturas (polling a /api/sensors), expone controles:
+//   * Botón "Regar ahora"            -> POST /api/water
+//   * Selector de canción de la SD   -> /api/songs (lista) + POST /api/play,
+//                                        POST /api/wsong (fijar canción de riego)
+//   * Campo de umbral de humedad     -> POST /api/threshold
+//   * Brillo independiente NeoPixel  -> POST /api/bright?r=1|2&v=0..255
 // =============================================================================
 #include "web_dashboard.h"
 #include "../core/config.h"
+#include "../core/settings.h"
+#include "../storage/sd_store.h"
 #include <WiFi.h>
 #include <WebServer.h>
 
-// HTML servido en /. Es estático: una sola lectura del firmware. El refresco
-// de valores lo hace el JS embebido haciendo fetch() a /api/sensors.
+// HTML servido en /. Es estático salvo el placeholder del intervalo de refresco.
 static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
 <!doctype html>
 <html lang="es">
@@ -24,6 +27,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
   body { font-family: sans-serif; margin: 0; padding: 20px;
          background: #f4f7f6; color: #222; }
   h1 { color: #2a9; margin-top: 0; }
+  h2 { color: #2a9; font-size: 18px; margin: 24px 0 8px; }
   .grid { display: grid; gap: 12px;
           grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
           max-width: 720px; }
@@ -35,10 +39,25 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
   .unit  { font-size: 14px; color: #555; margin-left: 4px; }
   .meta  { margin-top: 16px; color: #888; font-size: 12px; max-width: 720px; }
   .stale .value { color: #c33; }
+  .panel { background:#fff; border-radius:8px; padding:16px; max-width:720px;
+           box-shadow:0 1px 3px rgba(0,0,0,0.08); margin-bottom:12px; }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+         margin:8px 0; }
+  .row > label { min-width:150px; color:#555; font-size:14px; }
+  button { padding:10px 16px; background:#2a9; color:#fff; border:0;
+           border-radius:6px; font-size:14px; cursor:pointer; }
+  button.warn { background:#e67e22; }
+  button:active { opacity:.8; }
+  input[type=number], select { padding:8px; font-size:14px; border:1px solid #ccc;
+           border-radius:6px; }
+  input[type=range] { flex:1; min-width:140px; }
+  .hint { color:#999; font-size:12px; }
+  #status { margin-left:8px; font-size:13px; color:#2a9; }
 </style>
 </head>
 <body>
   <h1>Matera inteligente</h1>
+
   <div class="grid" id="grid">
     <div class="card"><div class="label">Humedad del suelo</div>
       <div class="value"><span id="soil">--</span><span class="unit">%</span></div></div>
@@ -57,9 +76,120 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
     &Uacute;ltima actualizaci&oacute;n: <span id="ts">--</span>
     &nbsp;|&nbsp; Riego: <span id="irr">--</span>
   </div>
+
+  <h2>Controles</h2>
+
+  <div class="panel">
+    <div class="row">
+      <label>Riego manual</label>
+      <button class="warn" onclick="post('/api/water','Riego iniciado')">Regar ahora</button>
+      <span class="hint">Inicia un ciclo de riego sin importar el sensor.</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Canci&oacute;n (microSD)</label>
+      <select id="songsel"></select>
+    </div>
+    <div class="row">
+      <label></label>
+      <button onclick="playNow()">Reproducir ahora</button>
+      <button onclick="setWatering()">Usar como canci&oacute;n de riego</button>
+    </div>
+    <div class="row hint" id="wsonglbl"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Umbral de humedad</label>
+      <input type="number" id="thr" min="0" max="100" step="1" style="width:90px">
+      <span class="unit">%</span>
+      <button onclick="setThreshold()">Aplicar</button>
+      <span class="hint">Por debajo de este valor se riega.</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Brillo anillo 1</label>
+      <input type="range" id="b1" min="0" max="255"
+             oninput="b1v.textContent=this.value" onchange="setBright(1,this.value)">
+      <span id="b1v">--</span>
+    </div>
+    <div class="row">
+      <label>Brillo anillo 2</label>
+      <input type="range" id="b2" min="0" max="255"
+             oninput="b2v.textContent=this.value" onchange="setBright(2,this.value)">
+      <span id="b2v">--</span>
+    </div>
+  </div>
+
+  <span id="status"></span>
+
 <script>
 const REFRESH_MS = __REFRESH_MS__;
 const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '--' : Number(v).toFixed(d);
+
+function flash(msg) {
+  const s = document.getElementById('status');
+  s.textContent = msg;
+  setTimeout(() => { s.textContent = ''; }, 2500);
+}
+
+async function post(url, okmsg) {
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    flash(okmsg || 'OK');
+  } catch (e) { flash('Error: ' + e.message); }
+}
+
+function playNow() {
+  const i = document.getElementById('songsel').value;
+  if (i === '') return flash('No hay canciones en la SD');
+  post('/api/play?i=' + i, 'Reproduciendo');
+}
+function setWatering() {
+  const sel = document.getElementById('songsel');
+  if (sel.value === '') return flash('No hay canciones en la SD');
+  post('/api/wsong?i=' + sel.value, 'Canción de riego fijada');
+  document.getElementById('wsonglbl').textContent =
+    'Canción de riego: ' + sel.options[sel.selectedIndex].text;
+}
+function setThreshold() {
+  const v = document.getElementById('thr').value;
+  post('/api/threshold?v=' + encodeURIComponent(v), 'Umbral = ' + v + '%');
+}
+function setBright(ring, v) {
+  post('/api/bright?r=' + ring + '&v=' + v, 'Brillo anillo ' + ring + ' = ' + v);
+}
+
+async function loadState() {
+  try {
+    const r = await fetch('/api/songs', { cache: 'no-store' });
+    const d = await r.json();
+    const sel = document.getElementById('songsel');
+    sel.innerHTML = '';
+    (d.songs || []).forEach((name, i) => {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = name;
+      sel.appendChild(o);
+    });
+    if (d.wateringSong >= 0 && d.songs && d.songs[d.wateringSong]) {
+      sel.value = d.wateringSong;
+      document.getElementById('wsonglbl').textContent =
+        'Canción de riego: ' + d.songs[d.wateringSong];
+    } else {
+      document.getElementById('wsonglbl').textContent =
+        'Canción de riego: (ninguna)';
+    }
+    document.getElementById('thr').value = Math.round(d.threshold);
+    document.getElementById('b1').value = d.b1; document.getElementById('b1v').textContent = d.b1;
+    document.getElementById('b2').value = d.b2; document.getElementById('b2v').textContent = d.b2;
+  } catch (e) { flash('No se pudo leer estado'); }
+}
+
 async function tick() {
   try {
     const r = await fetch('/api/sensors', { cache: 'no-store' });
@@ -78,6 +208,7 @@ async function tick() {
     document.body.classList.add('stale');
   }
 }
+loadState();
 tick();
 setInterval(tick, REFRESH_MS);
 </script>
@@ -86,9 +217,7 @@ setInterval(tick, REFRESH_MS);
 )HTML";
 
 // -----------------------------------------------------------------------------
-// renderIndex — sustituye el placeholder del intervalo de refresco. El resto
-// del HTML es estático, así que esta función es la única que produce churn por
-// request a /.
+// renderIndex — sustituye el placeholder del intervalo de refresco.
 // -----------------------------------------------------------------------------
 static String renderIndex() {
   String page = FPSTR(DASHBOARD_HTML);
@@ -97,8 +226,19 @@ static String renderIndex() {
 }
 
 // -----------------------------------------------------------------------------
-// renderSensorsJson — snapshot a JSON. Usa xQueuePeek (no destructivo) para no
-// afectar a otros consumidores de qSensorData.
+// jsonEscape — escapa comillas y barras de un nombre de archivo para JSON.
+// -----------------------------------------------------------------------------
+static String jsonEscape(const char* s) {
+  String out;
+  for (const char* p = s; *p; ++p) {
+    if (*p == '"' || *p == '\\') out += '\\';
+    out += *p;
+  }
+  return out;
+}
+
+// -----------------------------------------------------------------------------
+// renderSensorsJson — snapshot a JSON (no destructivo).
 // -----------------------------------------------------------------------------
 static String renderSensorsJson() {
   SensorData s{};
@@ -121,15 +261,37 @@ static String renderSensorsJson() {
   return String(buf);
 }
 
+// -----------------------------------------------------------------------------
+// renderStateJson — catálogo de canciones de la SD + valores de settings, para
+// que la UI pueble el selector y refleje umbral/brillo/canción de riego.
+// -----------------------------------------------------------------------------
+static String renderStateJson() {
+  RuntimeSettings st;
+  settings_get(st);
+
+  String out;
+  out.reserve(512);
+  out += "{\"songs\":[";
+  int n = sd_songCount();
+  for (int i = 0; i < n; ++i) {
+    if (i) out += ',';
+    out += '"';
+    out += jsonEscape(sd_songName(i));
+    out += '"';
+  }
+  out += "],";
+  out += "\"wateringSong\":" + String(st.wateringSongIndex) + ",";
+  out += "\"threshold\":" + String(st.soilThresholdPct, 1) + ",";
+  out += "\"b1\":" + String(st.neoBrightness1) + ",";
+  out += "\"b2\":" + String(st.neoBrightness2);
+  out += "}";
+  return out;
+}
+
 // =============================================================================
-// taskDashboard — espera a que la STA esté asociada (evtSystem) y arranca el
-// WebServer en la IP local. handleClient() es bloqueante corto: 50 ms de loop
-// es suficiente para servir un dashboard que sólo refresca cada ~2 s.
+// taskDashboard — espera a la STA, arranca el WebServer y atiende rutas.
 // =============================================================================
 void taskDashboard(void* arg) {
-  // Esperar al primer EVT_WIFI_CONNECTED antes de bind: si la STA no tiene IP
-  // todavía, server.begin() arranca igual, pero no queremos loguear una IP
-  // 0.0.0.0 y confundir al usuario.
   xEventGroupWaitBits(evtSystem, EVT_WIFI_CONNECTED,
                       pdFALSE, pdTRUE, portMAX_DELAY);
 
@@ -144,6 +306,63 @@ void taskDashboard(void* arg) {
     server.send(200, "application/json", renderSensorsJson());
   });
 
+  server.on("/api/songs", HTTP_GET, [&]() {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", renderStateJson());
+  });
+
+  // ---- Controles (POST) ----
+  server.on("/api/water", HTTP_POST, [&]() {
+    IrrigationCmd cmd = IRR_CMD_MANUAL_START;
+    xQueueSend(qIrrigationCmd, &cmd, 0);
+    logf("[web] riego manual solicitado");
+    server.send(200, "text/plain", "ok");
+  });
+
+  server.on("/api/play", HTTP_POST, [&]() {
+    int idx = server.arg("i").toInt();
+    if (idx >= 0 && idx < sd_songCount()) {
+      xQueueSend(qAudioCmd, &idx, 0);
+      logf("[web] reproducir canción %d", idx);
+      server.send(200, "text/plain", "ok");
+    } else {
+      server.send(400, "text/plain", "indice invalido");
+    }
+  });
+
+  server.on("/api/wsong", HTTP_POST, [&]() {
+    int idx = server.arg("i").toInt();
+    if (idx >= 0 && idx < sd_songCount()) {
+      settings_setWateringSong(idx);
+      logf("[web] canción de riego = %d", idx);
+      server.send(200, "text/plain", "ok");
+    } else {
+      server.send(400, "text/plain", "indice invalido");
+    }
+  });
+
+  server.on("/api/threshold", HTTP_POST, [&]() {
+    if (!server.hasArg("v")) { server.send(400, "text/plain", "falta v"); return; }
+    float v = server.arg("v").toFloat();
+    settings_setThreshold(v);
+    logf("[web] umbral de humedad = %.1f%%", v);
+    server.send(200, "text/plain", "ok");
+  });
+
+  server.on("/api/bright", HTTP_POST, [&]() {
+    if (!server.hasArg("r") || !server.hasArg("v")) {
+      server.send(400, "text/plain", "faltan args"); return;
+    }
+    int ring = server.arg("r").toInt();
+    int val  = server.arg("v").toInt();
+    if (val < 0) val = 0; if (val > 255) val = 255;
+    if (ring == 1)      settings_setBrightness1((uint8_t)val);
+    else if (ring == 2) settings_setBrightness2((uint8_t)val);
+    else { server.send(400, "text/plain", "anillo invalido"); return; }
+    logf("[web] brillo anillo %d = %d", ring, val);
+    server.send(200, "text/plain", "ok");
+  });
+
   server.onNotFound([&]() {
     server.send(404, "text/plain", "not found");
   });
@@ -154,8 +373,6 @@ void taskDashboard(void* arg) {
        (unsigned)WEB_DASHBOARD_PORT);
 
   for (;;) {
-    // Si perdimos WiFi, el WebServer no responde de todos modos; sólo
-    // esperamos a que vuelva la asociación y seguimos sirviendo.
     if (WiFi.status() == WL_CONNECTED) {
       server.handleClient();
     }
