@@ -134,10 +134,10 @@
 //     activar/parar la bomba) y a MQTT_TOPIC_CMD_PLAY (melodía de riego).
 // La Raspberry Pi usa LAS MISMAS credenciales y los mismos topics (ver carpeta
 // raspi/ en la raíz del proyecto).
-#define MQTT_HOST            "xxxxxxxxxxxx.s1.eu.hivemq.cloud"  // <-- tu cluster
+#define MQTT_HOST            "5108a699f83f490b8a6ad5de1a21dc2e.s1.eu.hivemq.cloud"  // <-- tu cluster
 #define MQTT_PORT            8883
-#define MQTT_USER            "matera"             // <-- usuario MQTT de HiveMQ
-#define MQTT_PASS            "CAMBIA_ESTA_CLAVE"  // <-- contraseña MQTT
+#define MQTT_USER            "Groot"             // <-- usuario MQTT de HiveMQ
+#define MQTT_PASS            "Hacktin8."  // <-- contraseña MQTT
 #define MQTT_CLIENT_ID       "matera-esp32"       // único por cliente conectado
 
 // Topics (deben coincidir con los de la Raspberry Pi):
