@@ -125,31 +125,28 @@
 //   * power-save desactivado durante scan / autenticación / DHCP
 #define WIFI_TX_POWER            WIFI_POWER_19_5dBm   // 19.5 dBm = máximo
 
-// -------- MQTT: ThingSpeak como ÚNICO broker --------------------------------
-// Generar un "MQTT Device" en https://thingspeak.com/devices/mqtt y pegar
-// abajo las credenciales que ThingSpeak devuelve. El canal asociado recibirá
-// los datos por channels/<id>/publish y emitirá comandos por
-// channels/<id>/subscribe/fields/fieldN.
-#define MQTT_HOST                  "mqtt3.thingspeak.com"
-#define MQTT_PORT                  1883
-#define THINGSPEAK_MQTT_CLIENT_ID  "HTkVOy45LTIXABgjOAwFDQc"
-#define THINGSPEAK_MQTT_USER       "HTkVOy45LTIXABgjOAwFDQc"
-#define THINGSPEAK_MQTT_PASS       "f/9Pnwyva5BE7pYnacLjVKAe"
-#define THINGSPEAK_CHANNEL_ID      3389743
+// -------- MQTT: HiveMQ Cloud (TLS) ------------------------------------------
+// Crear un cluster gratuito en https://www.hivemq.com/mqtt-cloud-broker/ y un
+// usuario MQTT (Access Management). Pegar abajo la URL del cluster, el usuario
+// y la contraseña. La conexión es TLS sobre el puerto 8883.
+//   * El ESP32 PUBLICA los sensores (JSON) en MQTT_TOPIC_SENSORS.
+//   * El ESP32 se SUSCRIBE a MQTT_TOPIC_CMD_PUMP (la Raspi publica "1"/"0" para
+//     activar/parar la bomba) y a MQTT_TOPIC_CMD_PLAY (melodía de riego).
+// La Raspberry Pi usa LAS MISMAS credenciales y los mismos topics (ver carpeta
+// raspi/ en la raíz del proyecto).
+#define MQTT_HOST            "xxxxxxxxxxxx.s1.eu.hivemq.cloud"  // <-- tu cluster
+#define MQTT_PORT            8883
+#define MQTT_USER            "matera"             // <-- usuario MQTT de HiveMQ
+#define MQTT_PASS            "CAMBIA_ESTA_CLAVE"  // <-- contraseña MQTT
+#define MQTT_CLIENT_ID       "matera-esp32"       // único por cliente conectado
 
-// Asignación de campos del canal (1..8). field1..6 = sensores publicados.
-// field7..8 = comandos remotos: el ESP32 se suscribe y reacciona cuando
-// alguien escribe en ellos desde ThingSpeak / app / API REST.
-#define TS_FIELD_SOIL              1
-#define TS_FIELD_TEMP              2
-#define TS_FIELD_HUM               3
-#define TS_FIELD_LUX               5
-#define TS_FIELD_PPM               6
-#define TS_FIELD_CMD_PLAY          7    // payload "1" -> reproducir melodía
-#define TS_FIELD_CMD_WATER         8    // payload "1" -> regar; "0" -> stop
+// Topics (deben coincidir con los de la Raspberry Pi):
+#define MQTT_TOPIC_SENSORS   "matera/sensors"     // ESP -> publica datos (JSON)
+#define MQTT_TOPIC_CMD_PUMP  "matera/cmd/pump"    // Raspi -> "1"=regar, "0"=stop
+#define MQTT_TOPIC_CMD_PLAY  "matera/cmd/play"    // Raspi -> "1"=reproducir
 
-// Período entre publicaciones (rate limit ThingSpeak free >= 15 s).
-#define MQTT_PUBLISH_PERIOD_MS     20000
+// Período entre publicaciones de sensores (HiveMQ no impone rate limit).
+#define MQTT_PUBLISH_PERIOD_MS     5000
 
 // -------- Dashboard local (servidor web en el ESP) ---------------------------
 // El ESP corre un servidor HTTP en su IP de STA (la IP que le asigne el router)

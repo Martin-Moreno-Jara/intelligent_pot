@@ -6,11 +6,11 @@
 //     boots posteriores se intentan las credenciales guardadas; si fallan se
 //     vuelve a abrir el portal. Modo de alto rendimiento (TX max, sin
 //     power-save) durante scan/autenticación para entornos con muchas redes.
-//   * MQTT: ThingSpeak es el ÚNICO broker. Publica sensores en
-//     channels/<id>/publish y se suscribe a channels/<id>/subscribe/fields/N
-//     para los comandos remotos. ThingSpeak se usa SÓLO como almacenamiento
-//     histórico remoto: el dashboard interactivo se sirve localmente desde
-//     este mismo ESP (ver web_dashboard.h).
+//   * MQTT: HiveMQ Cloud (TLS) es el ÚNICO broker. Publica los sensores en
+//     formato JSON en MQTT_TOPIC_SENSORS y se suscribe a MQTT_TOPIC_CMD_PUMP y
+//     MQTT_TOPIC_CMD_PLAY para los comandos remotos que envía la Raspberry Pi.
+//     La Raspberry Pi se suscribe a los sensores y sirve el dashboard web
+//     remoto; este ESP además mantiene su propio dashboard local (web_dashboard.h).
 // =============================================================================
 
 #include "../core/tasks.h"

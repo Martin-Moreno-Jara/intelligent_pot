@@ -1,5 +1,5 @@
 // =============================================================================
-// network.cpp — WiFi (portal cautivo + NVS) + MQTT a ThingSpeak.
+// network.cpp — WiFi (portal cautivo + NVS) + MQTT a HiveMQ Cloud (TLS).
 //
 // Flujo de conexión:
 //   1. enableHighPerfMode(): WiFi.setSleep(WIFI_PS_NONE) + TX power al máximo.
@@ -10,29 +10,63 @@
 //      conectar; si falla vuelve al portal. Al éxito guarda en NVS y apaga AP.
 //
 // MQTT:
-//   * Cliente PubSubClient apuntando a mqtt3.thingspeak.com:1883.
-//   * Publica en channels/<CH>/publish cada MQTT_PUBLISH_PERIOD_MS.
-//   * Se suscribe a channels/<CH>/subscribe/fields/field<TS_FIELD_CMD_PLAY>
-//     y .../field<TS_FIELD_CMD_WATER> para recibir comandos remotos.
+//   * Cliente PubSubClient sobre WiFiClientSecure (TLS) hacia HiveMQ Cloud:8883.
+//   * Publica JSON de sensores en MQTT_TOPIC_SENSORS cada MQTT_PUBLISH_PERIOD_MS.
+//   * Se suscribe a MQTT_TOPIC_CMD_PUMP (bomba) y MQTT_TOPIC_CMD_PLAY (melodía)
+//     para recibir comandos remotos enviados por la Raspberry Pi.
 // =============================================================================
 #include "network.h"
 #include "../core/config.h"
 #include "../core/settings.h"
 #include "../storage/sd_store.h"
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <PubSubClient.h>
 
-// Helpers para concatenar un #define numérico dentro de un string literal
-// (necesario porque TS_FIELD_CMD_PLAY/WATER son macros).
-#define STR_HELPER(x) #x
-#define STR(x)        STR_HELPER(x)
+// Root CA de HiveMQ Cloud. HiveMQ Cloud emite certificados con Let's Encrypt,
+// cuya raíz es "ISRG Root X1". Validar contra esta CA evita ataques MITM. Si la
+// conexión TLS fallara tras una rotación de CA, como último recurso se puede
+// usar s_tls.setInsecure() (NO recomendado: desactiva la validación).
+static const char HIVEMQ_ROOT_CA[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)EOF";
 
-static WiFiClient    s_wifiClient;
-static PubSubClient  s_mqtt(s_wifiClient);
-static Preferences   s_prefs;
+static WiFiClientSecure s_tls;
+static PubSubClient     s_mqtt(s_tls);
+static Preferences      s_prefs;
 
 // -----------------------------------------------------------------------------
 // enableHighPerfMode — desactiva power-save y sube TX al máximo. Llamar
@@ -233,19 +267,12 @@ bool network_initWiFi() {
 }
 
 // =============================================================================
-// MQTT — ThingSpeak es el único broker.
+// MQTT — HiveMQ Cloud (TLS) es el único broker.
 // =============================================================================
 
-// Topics dinámicos basados en THINGSPEAK_CHANNEL_ID. Se construyen una sola
-// vez al arrancar la tarea y se reutilizan.
-static char s_topicPub[64];
-static char s_topicSubPlay[80];
-static char s_topicSubWater[80];
-
 // -----------------------------------------------------------------------------
-// onMqttMessage — un único callback para los dos topics suscritos.
-// El protocolo ThingSpeak entrega el último valor del field como payload.
-// "1" / cualquier valor != 0 -> ejecutar comando; "0" -> stop (sólo riego).
+// onMqttMessage — callback para los topics de comandos suscritos.
+// La Raspberry Pi publica "1"/"0" (texto). "1" / != 0 -> ejecutar; "0" -> stop.
 // -----------------------------------------------------------------------------
 static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
   char buf[32] = {0};
@@ -253,7 +280,7 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
   memcpy(buf, payload, n);
   logf("[mqtt] rx topic=%s payload=%s", topic, buf);
 
-  if (strcmp(topic, s_topicSubPlay) == 0) {
+  if (strcmp(topic, MQTT_TOPIC_CMD_PLAY) == 0) {
     if (atoi(buf) != 0) {
       // Reproducir la canción de riego configurada; si no hay, la primera de
       // la SD (si existe alguna).
@@ -263,7 +290,7 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
                                             : (sd_songCount() > 0 ? 0 : -1);
       if (idx >= 0) xQueueSend(qAudioCmd, &idx, 0);
     }
-  } else if (strcmp(topic, s_topicSubWater) == 0) {
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_PUMP) == 0) {
     IrrigationCmd cmd = (atoi(buf) != 0)
         ? IRR_CMD_MANUAL_START
         : IRR_CMD_STOP;
@@ -272,21 +299,19 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
 }
 
 // -----------------------------------------------------------------------------
-// mqttReconnect — connect con credenciales MQTT de ThingSpeak (3-tuple).
+// mqttReconnect — connect con credenciales MQTT de HiveMQ Cloud.
 // -----------------------------------------------------------------------------
 static bool mqttReconnect() {
   if (s_mqtt.connected()) return true;
   if (WiFi.status() != WL_CONNECTED) return false;
 
-  bool ok = s_mqtt.connect(THINGSPEAK_MQTT_CLIENT_ID,
-                           THINGSPEAK_MQTT_USER,
-                           THINGSPEAK_MQTT_PASS);
+  bool ok = s_mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
   if (ok) {
-    s_mqtt.subscribe(s_topicSubPlay);
-    s_mqtt.subscribe(s_topicSubWater);
+    s_mqtt.subscribe(MQTT_TOPIC_CMD_PUMP);
+    s_mqtt.subscribe(MQTT_TOPIC_CMD_PLAY);
     xEventGroupSetBits(evtSystem, EVT_MQTT_CONNECTED);
-    logf("[mqtt] conectado a ThingSpeak. sub: %s , %s",
-         s_topicSubPlay, s_topicSubWater);
+    logf("[mqtt] conectado a HiveMQ. sub: %s , %s",
+         MQTT_TOPIC_CMD_PUMP, MQTT_TOPIC_CMD_PLAY);
   } else {
     xEventGroupClearBits(evtSystem, EVT_MQTT_CONNECTED);
     logf("[mqtt] connect FAILED rc=%d", s_mqtt.state());
@@ -295,24 +320,20 @@ static bool mqttReconnect() {
 }
 
 // -----------------------------------------------------------------------------
-// publishToThingSpeak — publica un channel update en formato form-encoded.
-// El topic es channels/<CH>/publish y el broker mapea field1..6 al canal.
+// publishSensors — publica el snapshot de sensores como JSON en
+// MQTT_TOPIC_SENSORS. La Raspberry Pi lo parsea para el dashboard.
 // -----------------------------------------------------------------------------
-static void publishToThingSpeak(const SensorData& s) {
+static void publishSensors(const SensorData& s) {
   char payload[224];
   snprintf(payload, sizeof(payload),
-    "field" STR(TS_FIELD_SOIL) "=%.2f"
-    "&field" STR(TS_FIELD_TEMP) "=%.2f"
-    "&field" STR(TS_FIELD_HUM)  "=%.2f"
-    "&field" STR(TS_FIELD_LUX)  "=%.1f"
-    "&field" STR(TS_FIELD_PPM)  "=%.0f"
-    "&status=irr=%d",
-    s.soilMoisturePct, s.tempC, s.humPct,
-    s.lux, s.airQualityPpm,
-    (xEventGroupGetBits(evtSystem) & EVT_IRRIGATING) ? 1 : 0);
+    "{\"soil\":%.2f,\"temp\":%.2f,\"hum\":%.2f,"
+     "\"lux\":%.1f,\"ppm\":%.0f,\"irrigating\":%s,\"ts\":%lu}",
+    s.soilMoisturePct, s.tempC, s.humPct, s.lux, s.airQualityPpm,
+    (xEventGroupGetBits(evtSystem) & EVT_IRRIGATING) ? "true" : "false",
+    (unsigned long)s.timestampMs);
 
-  s_mqtt.publish(s_topicPub, payload);
-  logf("[mqtt] pub %s -> %s", s_topicPub, payload);
+  s_mqtt.publish(MQTT_TOPIC_SENSORS, payload);
+  logf("[mqtt] pub %s -> %s", MQTT_TOPIC_SENSORS, payload);
 }
 
 // =============================================================================
@@ -320,16 +341,7 @@ static void publishToThingSpeak(const SensorData& s) {
 // procesa subs entrantes. Período de loop 200 ms (necesario para PubSubClient).
 // =============================================================================
 void taskMQTT(void* arg) {
-  // Topics dependen del channel id (macro), se construyen una vez.
-  snprintf(s_topicPub, sizeof(s_topicPub),
-           "channels/%lu/publish", (unsigned long)THINGSPEAK_CHANNEL_ID);
-  snprintf(s_topicSubPlay, sizeof(s_topicSubPlay),
-           "channels/%lu/subscribe/fields/field" STR(TS_FIELD_CMD_PLAY),
-           (unsigned long)THINGSPEAK_CHANNEL_ID);
-  snprintf(s_topicSubWater, sizeof(s_topicSubWater),
-           "channels/%lu/subscribe/fields/field" STR(TS_FIELD_CMD_WATER),
-           (unsigned long)THINGSPEAK_CHANNEL_ID);
-
+  s_tls.setCACert(HIVEMQ_ROOT_CA);   // validar el certificado de HiveMQ Cloud
   s_mqtt.setServer(MQTT_HOST, MQTT_PORT);
   s_mqtt.setCallback(onMqttMessage);
   s_mqtt.setBufferSize(512);
@@ -354,7 +366,7 @@ void taskMQTT(void* arg) {
       if (s_mqtt.connected() &&
           (now - lastPublish) >= MQTT_PUBLISH_PERIOD_MS) {
         if (xQueuePeek(qSensorData, &snap, 0) == pdTRUE) {
-          publishToThingSpeak(snap);
+          publishSensors(snap);
         }
         lastPublish = now;
       }
