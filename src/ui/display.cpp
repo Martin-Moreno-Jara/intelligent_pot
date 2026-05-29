@@ -200,12 +200,10 @@ static void renderPage(uint8_t page, const SensorData& s, bool haveData,
       tft.setTextColor(COL_ACCENT);
       tft.print("Ambiente");
 
-      drawKVLine(CONTENT_Y + 36,  "Temp ",
-                 String(s.tempC, 1),       "C",   COL_FG);
-      drawKVLine(CONTENT_Y + 72,  "Hum  ",
-                 String(s.humPct, 1),      "%",   COL_FG);
-      drawKVLine(CONTENT_Y + 108, "Pres ",
-                 String(s.pressureHPa, 1), "hPa", COL_FG);
+      drawKVLine(CONTENT_Y + 36, "Temp ",
+                 String(s.tempC, 1),  "C", COL_FG);
+      drawKVLine(CONTENT_Y + 72, "Hum  ",
+                 String(s.humPct, 1), "%", COL_FG);
       break;
     }
     case 2: {

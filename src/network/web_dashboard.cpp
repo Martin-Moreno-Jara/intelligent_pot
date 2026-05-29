@@ -65,8 +65,6 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
       <div class="value"><span id="temp">--</span><span class="unit">&deg;C</span></div></div>
     <div class="card"><div class="label">Humedad ambiente</div>
       <div class="value"><span id="hum">--</span><span class="unit">%</span></div></div>
-    <div class="card"><div class="label">Presi&oacute;n</div>
-      <div class="value"><span id="pres">--</span><span class="unit">hPa</span></div></div>
     <div class="card"><div class="label">Luz</div>
       <div class="value"><span id="lux">--</span><span class="unit">lx</span></div></div>
     <div class="card"><div class="label">Calidad de aire</div>
@@ -198,7 +196,6 @@ async function tick() {
     document.getElementById('soil').textContent = fmt(d.soil, 1);
     document.getElementById('temp').textContent = fmt(d.temp, 1);
     document.getElementById('hum').textContent  = fmt(d.hum,  1);
-    document.getElementById('pres').textContent = fmt(d.pres, 1);
     document.getElementById('lux').textContent  = fmt(d.lux,  0);
     document.getElementById('ppm').textContent  = fmt(d.ppm,  0);
     document.getElementById('ts').textContent   = new Date().toLocaleTimeString();
@@ -252,10 +249,10 @@ static String renderSensorsJson() {
   snprintf(buf, sizeof(buf),
     "{\"ready\":true,"
      "\"soil\":%.2f,\"temp\":%.2f,\"hum\":%.2f,"
-     "\"pres\":%.2f,\"lux\":%.1f,\"ppm\":%.0f,"
+     "\"lux\":%.1f,\"ppm\":%.0f,"
      "\"irrigating\":%s,\"ts\":%lu}",
     s.soilMoisturePct, s.tempC, s.humPct,
-    s.pressureHPa, s.lux, s.airQualityPpm,
+    s.lux, s.airQualityPpm,
     irrigating ? "true" : "false",
     (unsigned long)s.timestampMs);
   return String(buf);

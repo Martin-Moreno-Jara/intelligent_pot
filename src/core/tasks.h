@@ -25,12 +25,10 @@ struct SensorData {
   uint16_t soilRaw;           // ADC bruto (para debug)
   float    tempC;
   float    humPct;
-  float    pressureHPa;
   float    lux;
   float    airQualityPpm;     // CO2-eq estimado por MQ-135
   uint32_t timestampMs;
-  bool     ahtOk;
-  bool     bmpOk;
+  bool     dhtOk;
   bool     bh1750Ok;
 };
 

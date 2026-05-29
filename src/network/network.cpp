@@ -304,12 +304,11 @@ static void publishToThingSpeak(const SensorData& s) {
     "field" STR(TS_FIELD_SOIL) "=%.2f"
     "&field" STR(TS_FIELD_TEMP) "=%.2f"
     "&field" STR(TS_FIELD_HUM)  "=%.2f"
-    "&field" STR(TS_FIELD_PRES) "=%.2f"
     "&field" STR(TS_FIELD_LUX)  "=%.1f"
     "&field" STR(TS_FIELD_PPM)  "=%.0f"
     "&status=irr=%d",
     s.soilMoisturePct, s.tempC, s.humPct,
-    s.pressureHPa, s.lux, s.airQualityPpm,
+    s.lux, s.airQualityPpm,
     (xEventGroupGetBits(evtSystem) & EVT_IRRIGATING) ? 1 : 0);
 
   s_mqtt.publish(s_topicPub, payload);

@@ -14,15 +14,18 @@
 
 #include <Arduino.h>
 
-// -------- I2C (compartido por AHT20, BMP280 y BH1750) ------------------------
+// -------- I2C (compartido por BH1750) ----------------------------------------
 // El display NO usa I2C: la pantalla TFT 1.3" ST7789 va por SPI.
 #define PIN_I2C_SDA           8
 #define PIN_I2C_SCL           9
 #define I2C_FREQ_HZ           100000   // 100 kHz: estable con varios sensores
 
+// -------- DHT11 (temperatura y humedad, bus 1-Wire) --------------------------
+#define PIN_DHT               5    // Pin de datos del DHT11
+
 // -------- Sensores analógicos (ADC1 en ESP32-S3) -----------------------------
 #define PIN_SOIL_SENSOR       4    // SEN0193 (capacitivo) — "SUCHO" en el test
-#define PIN_MQ135             5    // MQ-135 (CO2-eq / AQI) — "AIRE" en el test
+#define PIN_MQ135             3    // MQ-135 (CO2-eq / AQI) — "AIRE" en el test
 #define ADC_RESOLUTION_BITS   12   // 0..4095
 
 // SEN0193: calibración (ajustar tomando lecturas en seco/agua)
@@ -140,7 +143,6 @@
 #define TS_FIELD_SOIL              1
 #define TS_FIELD_TEMP              2
 #define TS_FIELD_HUM               3
-#define TS_FIELD_PRES              4
 #define TS_FIELD_LUX               5
 #define TS_FIELD_PPM               6
 #define TS_FIELD_CMD_PLAY          7    // payload "1" -> reproducir melodía

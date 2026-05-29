@@ -1,21 +1,18 @@
 // =============================================================================
 // sensors.cpp — Implementación de la tarea de adquisición de sensores.
-// Bloquea mtxI2C durante las lecturas I2C; el ADC no necesita mutex porque
-// sólo lo usa esta tarea.
+// Bloquea mtxI2C durante las lecturas I2C; el ADC y el DHT11 no necesitan
+// mutex porque sólo los usa esta tarea.
 // =============================================================================
 #include "sensors.h"
 #include "../core/config.h"
 #include <Wire.h>
-#include <Adafruit_AHTX0.h>
-#include <Adafruit_BMP280.h>
+#include <DHT.h>
 #include <BH1750.h>
 
-static Adafruit_AHTX0   aht;
-static Adafruit_BMP280  bmp;
-static BH1750           bh1750;
+static DHT     dht(PIN_DHT, DHT11);
+static BH1750  bh1750;
 
-static bool s_ahtReady    = false;
-static bool s_bmpReady    = false;
+static bool s_dhtReady    = false;
 static bool s_bh1750Ready = false;
 
 // -----------------------------------------------------------------------------
@@ -52,7 +49,7 @@ static float readMQ135Ppm() {
 }
 
 // =============================================================================
-// sensors_init — Inicializa I2C compartido y cada sensor I2C.
+// sensors_init — Inicializa I2C compartido, DHT11 y cada sensor I2C.
 // =============================================================================
 bool sensors_init() {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
@@ -61,21 +58,13 @@ bool sensors_init() {
   analogSetPinAttenuation(PIN_SOIL_SENSOR, ADC_11db);
   analogSetPinAttenuation(PIN_MQ135,       ADC_11db);
 
-  s_ahtReady = aht.begin();
-  // BMP280 puede estar en 0x76 o 0x77; intentar ambas.
-  s_bmpReady = bmp.begin(0x76) || bmp.begin(0x77);
-  if (s_bmpReady) {
-    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
-                    Adafruit_BMP280::SAMPLING_X2,
-                    Adafruit_BMP280::SAMPLING_X16,
-                    Adafruit_BMP280::FILTER_X16,
-                    Adafruit_BMP280::STANDBY_MS_500);
-  }
+  dht.begin();
+  s_dhtReady = true;
+
   s_bh1750Ready = bh1750.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
 
-  logf("[sensors] AHT20:%d  BMP280:%d  BH1750:%d",
-       s_ahtReady, s_bmpReady, s_bh1750Ready);
-  return s_ahtReady || s_bmpReady || s_bh1750Ready;
+  logf("[sensors] DHT11:%d  BH1750:%d", s_dhtReady, s_bh1750Ready);
+  return s_dhtReady || s_bh1750Ready;
 }
 
 // =============================================================================
@@ -93,27 +82,26 @@ void taskSensors(void* arg) {
     data.soilRaw         = raw;
     data.airQualityPpm   = readMQ135Ppm();
 
+    // ---- lectura DHT11 (1-Wire, sin mutex) ----
+    if (s_dhtReady) {
+      float h = dht.readHumidity();
+      float t = dht.readTemperature();
+      if (!isnan(h) && !isnan(t)) {
+        data.tempC  = t;
+        data.humPct = h;
+        data.dhtOk  = true;
+      } else {
+        data.dhtOk = false;
+      }
+    }
+
     // ---- lecturas I2C (protegidas por mtxI2C) ----
     if (xSemaphoreTake(mtxI2C, pdMS_TO_TICKS(200)) == pdTRUE) {
-      if (s_ahtReady) {
-        sensors_event_t hum, tmp;
-        if (aht.getEvent(&hum, &tmp)) {
-          data.tempC  = tmp.temperature;
-          data.humPct = hum.relative_humidity;
-          data.ahtOk  = true;
-        } else {
-          data.ahtOk = false;
-        }
-      }
-      if (s_bmpReady) {
-        data.pressureHPa = bmp.readPressure() / 100.0f;
-        data.bmpOk       = true;
-      }
       if (s_bh1750Ready) {
         float lx = bh1750.readLightLevel();
         if (lx >= 0) {
-          data.lux       = lx;
-          data.bh1750Ok  = true;
+          data.lux      = lx;
+          data.bh1750Ok = true;
         }
       }
       xSemaphoreGive(mtxI2C);
@@ -124,9 +112,9 @@ void taskSensors(void* arg) {
     // Publicar snapshot (sobrescribe el anterior; consumidores hacen peek).
     xQueueOverwrite(qSensorData, &data);
 
-    logf("[sensors] soil=%.1f%% T=%.1fC H=%.1f%% P=%.1fhPa lux=%.0f ppm=%.0f",
+    logf("[sensors] soil=%.1f%% T=%.1fC H=%.1f%% lux=%.0f ppm=%.0f",
          data.soilMoisturePct, data.tempC, data.humPct,
-         data.pressureHPa, data.lux, data.airQualityPpm);
+         data.lux, data.airQualityPpm);
 
     vTaskDelayUntil(&lastWake, period);
   }
