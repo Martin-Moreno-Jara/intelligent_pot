@@ -37,7 +37,7 @@
 // la lógica está INVERTIDA (LOW = encendido, HIGH = apagado). Si tu hardware
 // usa un MOSFET directo (HIGH = encendido), poné PUMP_ACTIVE_LOW en 0.
 #define PIN_PUMP              10   // "PIN_BOMBA" en el test
-#define PUMP_ACTIVE_LOW       1    // 1 = optoacoplador (LOW enciende)
+#define PUMP_ACTIVE_LOW       0    // 1 = optoacoplador (LOW enciende)
 
 // -------- Servo de rotación continua 360° (LEDC, no ESP32Servo) --------------
 // Valores de pulso calibrados para 14 bits a 50 Hz (periodo = 20 ms), iguales
@@ -59,6 +59,15 @@
 #define PIN_NEOPIXEL_2        20    // "PIN_NEO_2" en el test
 #define NEOPIXEL_COUNT        8
 #define NEOPIXEL_BRIGHTNESS   40    // 0..255, brillo inicial de ambos anillos
+
+// Patrones disponibles (guardados en el ESP). El dashboard remoto sólo envía el
+// NOMBRE del patrón por MQTT y el ESP decide cómo renderizarlo (ver leds.cpp).
+// La lista se publica en MQTT_TOPIC_STATE para poblar el selector de la Raspi.
+#define NEO_PATTERNS_CSV      "rainbow,solid,off,breathe,comet"
+#define NEO_PATTERN_DEFAULT   "rainbow"
+#define NEO_COLOR_R_DEFAULT   255    // color inicial para patrones de color sólido
+#define NEO_COLOR_G_DEFAULT   120
+#define NEO_COLOR_B_DEFAULT   0
 
 // -------- Audio I2S (MAX98357A) + microSD (MP3 con ESP8266Audio) -------------
 #define PIN_I2S_BCLK          35
@@ -134,16 +143,27 @@
 //     activar/parar la bomba) y a MQTT_TOPIC_CMD_PLAY (melodía de riego).
 // La Raspberry Pi usa LAS MISMAS credenciales y los mismos topics (ver carpeta
 // raspi/ en la raíz del proyecto).
-#define MQTT_HOST            "xxxxxxxxxxxx.s1.eu.hivemq.cloud"  // <-- tu cluster
+#define MQTT_HOST            "5108a699f83f490b8a6ad5de1a21dc2e.s1.eu.hivemq.cloud"  // <-- tu cluster
 #define MQTT_PORT            8883
-#define MQTT_USER            "matera"             // <-- usuario MQTT de HiveMQ
-#define MQTT_PASS            "CAMBIA_ESTA_CLAVE"  // <-- contraseña MQTT
+#define MQTT_USER            "Groot"             // <-- usuario MQTT de HiveMQ
+#define MQTT_PASS            "Hacktin8."  // <-- contraseña MQTT
 #define MQTT_CLIENT_ID       "matera-esp32"       // único por cliente conectado
 
 // Topics (deben coincidir con los de la Raspberry Pi):
-#define MQTT_TOPIC_SENSORS   "matera/sensors"     // ESP -> publica datos (JSON)
-#define MQTT_TOPIC_CMD_PUMP  "matera/cmd/pump"    // Raspi -> "1"=regar, "0"=stop
-#define MQTT_TOPIC_CMD_PLAY  "matera/cmd/play"    // Raspi -> "1"=reproducir
+//   ESP -> publica
+#define MQTT_TOPIC_SENSORS   "matera/sensors"     // datos de sensores (JSON), c/5s
+#define MQTT_TOPIC_STATE     "matera/state"       // estado/catálogo (JSON, RETAINED)
+//   Raspi -> publica (el ESP se suscribe al comodín "matera/cmd/#")
+#define MQTT_TOPIC_CMD_WILDCARD     "matera/cmd/#"
+#define MQTT_TOPIC_CMD_PUMP         "matera/cmd/pump"        // "1"=regar ahora, "0"=stop
+#define MQTT_TOPIC_CMD_PLAY         "matera/cmd/play"        // índice de canción a reproducir
+#define MQTT_TOPIC_CMD_STOP         "matera/cmd/stop"        // detener audio (cualquier payload)
+#define MQTT_TOPIC_CMD_VOLUME       "matera/cmd/volume"      // nivel 0..AUDIO_VOLUME_MAX
+#define MQTT_TOPIC_CMD_WSONG        "matera/cmd/wsong"       // índice -> canción de riego
+#define MQTT_TOPIC_CMD_THRESHOLD    "matera/cmd/threshold"   // float -> umbral de humedad
+#define MQTT_TOPIC_CMD_NEO_BRIGHT   "matera/cmd/neo/bright"  // 0..255 (ambos anillos)
+#define MQTT_TOPIC_CMD_NEO_PATTERN  "matera/cmd/neo/pattern" // nombre del patrón
+#define MQTT_TOPIC_CMD_NEO_COLOR    "matera/cmd/neo/color"   // color "RRGGBB" (hex)
 
 // Período entre publicaciones de sensores (HiveMQ no impone rate limit).
 #define MQTT_PUBLISH_PERIOD_MS     5000

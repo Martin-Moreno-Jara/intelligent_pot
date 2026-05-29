@@ -63,6 +63,10 @@ extern EventGroupHandle_t evtSystem;
 #define EVT_MQTT_CONNECTED    (1 << 1)
 #define EVT_IRRIGATING        (1 << 2)
 #define EVT_AUDIO_PLAYING     (1 << 3)
+// Se activa cuando cambia cualquier ajuste en caliente (umbral, volumen, brillo,
+// patrón/color NeoPixel, canción de riego). La tarea MQTT lo observa para
+// republicar MQTT_TOPIC_STATE (retained) y mantener sincronizada a la Raspi.
+#define EVT_STATE_DIRTY       (1 << 4)
 
 // ----- Task handles ----------------------------------------------------------
 extern TaskHandle_t hTaskSensors;
