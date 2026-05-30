@@ -170,8 +170,8 @@ static void renderValues(const SensorData& s, bool irrigating) {
 
   // Suelo: color según el umbral vigente.
   uint16_t soilCol = COL_OK;
-  if (s.soilMoisturePct < rs.soilThresholdPct)           soilCol = COL_BAD;
-  else if (s.soilMoisturePct < rs.soilThresholdPct + 15) soilCol = COL_WARN;
+  if (s.soilMoisturePct < rs.soilThresholdLowPct)           soilCol = COL_BAD;
+  else if (s.soilMoisturePct < rs.soilThresholdLowPct + 15) soilCol = COL_WARN;
   updateValue(0, String((int)s.soilMoisturePct) + " %", soilCol);
 
   updateValue(1, String(s.tempC, 1) + " C", COL_FG);

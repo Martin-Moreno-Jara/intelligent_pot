@@ -22,14 +22,20 @@
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n===== Matera inteligente boot =====");
+  Serial.println("\n===== Matera inteligente boot v1 =====");
 
   // 1) Primitivas de sincronización + config en caliente ANTES de cualquier
   //    tarea o módulo que las use.
   tasks_initPrimitives();
   settings_init();
 
-  // 2) Inicialización de periféricos.
+  // 2) La bomba se inicializa LO ANTES POSIBLE para evitar que el GPIO 10 flote
+  //    en alta impedancia (estado por defecto tras reset) mientras se inician los
+  //    demás periféricos. Con PUMP_ACTIVE_LOW=1 el nivel flotante tiende a LOW,
+  //    lo que activa el optoacoplador y enciende la bomba.
+  bool irrigationOk = irrigation_init();
+
+  // 3) Resto de periféricos.
   //    sensors_init()  arranca Wire (I2C compartido por los sensores).
   //    display_init()  usa el bus SPI por defecto (FSPI) para la TFT ST7789.
   //    sd_init()       monta la microSD en su bus HSPI dedicado y lista los MP3
@@ -38,7 +44,6 @@ void setup() {
   bool sensorsOk    = sensors_init();
   bool displayOk    = display_init();
   bool sdOk         = sd_init();
-  bool irrigationOk = irrigation_init();
   bool servoOk      = servo_init();
   bool ledsOk       = leds_init();
   bool audioOk      = audio_init();
@@ -46,7 +51,7 @@ void setup() {
   logf("[boot] sensors:%d display:%d sd:%d irrigation:%d servo:%d leds:%d audio:%d",
        sensorsOk, displayOk, sdOk, irrigationOk, servoOk, ledsOk, audioOk);
 
-  // 3) WiFi: si hay credenciales en NVS las usa; si fallan o no hay,
+  // 4) WiFi: si hay credenciales en NVS las usa; si fallan o no hay,
   //    levanta el portal cautivo en su propio AP y bloquea hasta tener
   //    credenciales válidas. Al retornar, la STA está asociada y tenemos IP.
   network_initWiFi();
@@ -67,7 +72,7 @@ void setup() {
        ip.toString().c_str(), ip.toString().c_str(),
        (unsigned)WEB_DASHBOARD_PORT);
 
-  // 4) Lanzar todas las tareas FreeRTOS (incluye dashboard local + MQTT a
+  // 5) Lanzar todas las tareas FreeRTOS (incluye dashboard local + MQTT a
   //    ThingSpeak; ambas conviven sobre la misma asociación WiFi).
   tasks_startAll();
 

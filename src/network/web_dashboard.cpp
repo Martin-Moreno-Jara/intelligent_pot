@@ -3,9 +3,9 @@
 //
 // Además de mostrar las lecturas (polling a /api/sensors), expone controles:
 //   * Botón "Regar ahora"            -> POST /api/water
-//   * Selector de canción de la SD   -> /api/songs (lista) + POST /api/play,
-//                                        POST /api/wsong (fijar canción de riego)
-//   * Campo de umbral de humedad     -> POST /api/threshold
+//   * Selector de canción de la SD   -> /api/songs (lista) + POST /api/play
+//   * Umbral de humedad              -> POST /api/threshold
+//   * Intervalo de riego             -> POST /api/irr_interval
 //   * Brillo independiente NeoPixel  -> POST /api/bright?r=1|2&v=0..255
 // =============================================================================
 #include "web_dashboard.h"
@@ -81,30 +81,21 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
     <div class="row">
       <label>Riego manual</label>
       <button class="warn" onclick="post('/api/water','Riego iniciado')">Regar ahora</button>
-      <span class="hint">Inicia un ciclo de riego sin importar el sensor.</span>
+      <span class="hint">Pulso de 5 s inmediato, sin afectar el temporizador.</span>
     </div>
-  </div>
-
-  <div class="panel">
-    <div class="row">
-      <label>Canci&oacute;n (microSD)</label>
-      <select id="songsel"></select>
-    </div>
-    <div class="row">
-      <label></label>
-      <button onclick="playNow()">Reproducir ahora</button>
-      <button onclick="setWatering()">Usar como canci&oacute;n de riego</button>
-    </div>
-    <div class="row hint" id="wsonglbl"></div>
-  </div>
-
-  <div class="panel">
     <div class="row">
       <label>Umbral de humedad</label>
-      <input type="number" id="thr" min="0" max="100" step="1" style="width:90px">
+      <input type="number" id="thrLow" min="0" max="100" step="1" style="width:90px">
       <span class="unit">%</span>
-      <button onclick="setThreshold()">Aplicar</button>
-      <span class="hint">Por debajo de este valor se riega.</span>
+      <button onclick="setThresholdLow()">Aplicar</button>
+      <span class="hint">Solo riega si la humedad est&aacute; por debajo al vencer el intervalo.</span>
+    </div>
+    <div class="row">
+      <label>Intervalo de riego</label>
+      <input type="number" id="irrInterval" min="0.1" max="720" step="0.5" style="width:90px">
+      <span class="unit">h</span>
+      <button onclick="setIrrInterval()">Aplicar</button>
+      <span class="hint">Tiempo entre revisiones autom&aacute;ticas.</span>
     </div>
   </div>
 
@@ -148,16 +139,13 @@ function playNow() {
   if (i === '') return flash('No hay canciones en la SD');
   post('/api/play?i=' + i, 'Reproduciendo');
 }
-function setWatering() {
-  const sel = document.getElementById('songsel');
-  if (sel.value === '') return flash('No hay canciones en la SD');
-  post('/api/wsong?i=' + sel.value, 'Canción de riego fijada');
-  document.getElementById('wsonglbl').textContent =
-    'Canción de riego: ' + sel.options[sel.selectedIndex].text;
-}
-function setThreshold() {
-  const v = document.getElementById('thr').value;
+function setThresholdLow() {
+  const v = document.getElementById('thrLow').value;
   post('/api/threshold?v=' + encodeURIComponent(v), 'Umbral = ' + v + '%');
+}
+function setIrrInterval() {
+  const v = document.getElementById('irrInterval').value;
+  post('/api/irr_interval?v=' + encodeURIComponent(v), 'Intervalo = ' + v + ' h');
 }
 function setBright(ring, v) {
   post('/api/bright?r=' + ring + '&v=' + v, 'Brillo anillo ' + ring + ' = ' + v);
@@ -174,15 +162,8 @@ async function loadState() {
       o.value = i; o.textContent = name;
       sel.appendChild(o);
     });
-    if (d.wateringSong >= 0 && d.songs && d.songs[d.wateringSong]) {
-      sel.value = d.wateringSong;
-      document.getElementById('wsonglbl').textContent =
-        'Canción de riego: ' + d.songs[d.wateringSong];
-    } else {
-      document.getElementById('wsonglbl').textContent =
-        'Canción de riego: (ninguna)';
-    }
-    document.getElementById('thr').value = Math.round(d.threshold);
+    document.getElementById('thrLow').value     = d.thresholdLow;
+    document.getElementById('irrInterval').value = d.irrigationInterval;
     document.getElementById('b1').value = d.b1; document.getElementById('b1v').textContent = d.b1;
     document.getElementById('b2').value = d.b2; document.getElementById('b2v').textContent = d.b2;
   } catch (e) { flash('No se pudo leer estado'); }
@@ -277,8 +258,8 @@ static String renderStateJson() {
     out += '"';
   }
   out += "],";
-  out += "\"wateringSong\":" + String(st.wateringSongIndex) + ",";
-  out += "\"threshold\":" + String(st.soilThresholdPct, 1) + ",";
+  out += "\"thresholdLow\":" + String(st.soilThresholdLowPct, 1) + ",";
+  out += "\"irrigationInterval\":" + String(st.irrigationIntervalHrs, 1) + ",";
   out += "\"b1\":" + String(st.neoBrightness1) + ",";
   out += "\"b2\":" + String(st.neoBrightness2);
   out += "}";
@@ -327,22 +308,19 @@ void taskDashboard(void* arg) {
     }
   });
 
-  server.on("/api/wsong", HTTP_POST, [&]() {
-    int idx = server.arg("i").toInt();
-    if (idx >= 0 && idx < sd_songCount()) {
-      settings_setWateringSong(idx);
-      logf("[web] canción de riego = %d", idx);
-      server.send(200, "text/plain", "ok");
-    } else {
-      server.send(400, "text/plain", "indice invalido");
-    }
-  });
-
   server.on("/api/threshold", HTTP_POST, [&]() {
     if (!server.hasArg("v")) { server.send(400, "text/plain", "falta v"); return; }
     float v = server.arg("v").toFloat();
-    settings_setThreshold(v);
-    logf("[web] umbral de humedad = %.1f%%", v);
+    settings_setThresholdLow(v);
+    logf("[web] umbral humedad = %.1f%%", v);
+    server.send(200, "text/plain", "ok");
+  });
+
+  server.on("/api/irr_interval", HTTP_POST, [&]() {
+    if (!server.hasArg("v")) { server.send(400, "text/plain", "falta v"); return; }
+    float v = server.arg("v").toFloat();
+    settings_setIrrigationInterval(v);
+    logf("[web] intervalo riego = %.1f h", v);
     server.send(200, "text/plain", "ok");
   });
 

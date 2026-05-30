@@ -300,12 +300,11 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
     int cmd = AUDIO_VOL_CMD(level);
     xQueueSend(qAudioCmd, &cmd, 0);   // la tarea de audio refleja el nivel en settings
 
-  } else if (strcmp(topic, MQTT_TOPIC_CMD_WSONG) == 0) {
-    int idx = atoi(buf);
-    if (idx >= 0 && idx < sd_songCount()) settings_setWateringSong(idx);
-
   } else if (strcmp(topic, MQTT_TOPIC_CMD_THRESHOLD) == 0) {
-    settings_setThreshold((float)atof(buf));
+    settings_setThresholdLow((float)atof(buf));
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_IRR_INTERVAL) == 0) {
+    settings_setIrrigationInterval((float)atof(buf));
 
   } else if (strcmp(topic, MQTT_TOPIC_CMD_NEO_BRIGHT) == 0) {
     int v = atoi(buf);
@@ -394,10 +393,10 @@ static void publishState() {
     out += '"';
   }
   out += "],";
-  out += "\"wateringSong\":" + String(st.wateringSongIndex) + ",";
   out += "\"volume\":" + String(st.audioVolume) + ",";
   out += "\"volumeMax\":" + String(AUDIO_VOLUME_MAX) + ",";
-  out += "\"threshold\":" + String(st.soilThresholdPct, 1) + ",";
+  out += "\"thresholdLow\":" + String(st.soilThresholdLowPct, 1) + ",";
+  out += "\"irrigationInterval\":" + String(st.irrigationIntervalHrs, 1) + ",";
   out += "\"neoBright\":" + String(st.neoBrightness1) + ",";
   out += "\"neoBright2\":" + String(st.neoBrightness2) + ",";
   out += "\"neoPattern\":\"" + String(st.neoPattern) + "\",";
