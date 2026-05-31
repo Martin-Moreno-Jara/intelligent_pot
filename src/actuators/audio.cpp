@@ -12,6 +12,7 @@
 // =============================================================================
 #include "audio.h"
 #include "../core/config.h"
+#include "../core/settings.h"
 #include "../storage/sd_store.h"
 
 #include <AudioFileSourceSD.h>
@@ -57,6 +58,9 @@ void taskAudio(void* arg) {
         if (nivel > AUDIO_VOLUME_MAX) nivel = AUDIO_VOLUME_MAX;
         s_volumeLevel = nivel;
         out->SetGain(kGanancias[nivel]);
+        // Reflejar el nivel en settings para que el estado MQTT (y ambos
+        // dashboards) muestren el volumen vigente.
+        settings_setVolume(nivel);
         logf("[audio] volumen=%d", nivel);
       } else if (cmd == AUDIO_CMD_STOP) {
         if (reproduciendo) {

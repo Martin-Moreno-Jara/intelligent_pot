@@ -1,164 +1,95 @@
-// =============================================================================
-// irrigation.cpp — FSM de riego por pulsos:
-//   IDLE -> PULSE_ON -> SETTLE -> (PULSE_ON | COOLDOWN) -> ... -> IDLE
+// irrigation.cpp — Riego por intervalo de tiempo + umbral de humedad.
 //
-// Hardware: bomba en PIN_PUMP. La polaridad la fija PUMP_ACTIVE_LOW en config.h
-// (1 = optoacoplador, LOW enciende). El servo de rotación continua se maneja en
-// servo360.cpp, no aquí.
-// =============================================================================
+// El ciclo automático se cumple SOLO si se dan ambas condiciones:
+//   1. Ha transcurrido irrigationIntervalHrs desde el último ciclo (o boot).
+//   2. La humedad del suelo está por debajo de soilThresholdLowPct.
+// Si la condición 2 no se cumple al vencer el intervalo, se espera al
+// siguiente intervalo sin regar.
+// El pulso de bomba dura exactamente IRRIGATION_PULSE_MS (5 s).
+//
+// El riego manual (broker "1") ejecuta el mismo pulso de 5 s inmediatamente,
+// sin afectar el temporizador automático.
 #include "irrigation.h"
 #include "../core/config.h"
 #include "../core/settings.h"
 
-enum IrrState : uint8_t {
-  IRR_IDLE,       // monitoreando; bomba apagada
-  IRR_PULSE_ON,   // bomba encendida durante un pulso
-  IRR_SETTLE,     // bomba apagada, esperando a que el sensor se estabilice
-  IRR_COOLDOWN    // pausa obligatoria tras terminar un ciclo
-};
+enum IrrState : uint8_t { IRR_WAITING, IRR_PUMPING };
 
-static IrrState s_state         = IRR_IDLE;
-static uint32_t s_stateStartMs  = 0;     // millis() al entrar al estado actual
-static uint8_t  s_pulseCount     = 0;    // pulsos dados en el ciclo en curso
+static IrrState  s_state       = IRR_WAITING;
+static uint32_t  s_stateStart  = 0;   // millis() al entrar al estado actual
+static uint32_t  s_lastCheckMs = 0;   // millis() del último chequeo automático
 
-// -----------------------------------------------------------------------------
-// pumpOn/pumpOff — respetan la polaridad configurada (optoacoplador o MOSFET).
-// -----------------------------------------------------------------------------
-static inline void pumpOn() {
-#if PUMP_ACTIVE_LOW
-  digitalWrite(PIN_PUMP, LOW);
-#else
-  digitalWrite(PIN_PUMP, HIGH);
-#endif
-}
-static inline void pumpOff() {
-#if PUMP_ACTIVE_LOW
-  digitalWrite(PIN_PUMP, HIGH);
-#else
-  digitalWrite(PIN_PUMP, LOW);
-#endif
+static inline void drv8833On()  { digitalWrite(PIN_PUMP_IN1, HIGH); }
+static inline void drv8833Off() { digitalWrite(PIN_PUMP_IN1, LOW);  }
+
+static void enterState(IrrState st) {
+  s_state      = st;
+  s_stateStart = millis();
 }
 
-static inline void enterState(IrrState st) {
-  s_state        = st;
-  s_stateStartMs = millis();
-}
-
-// -----------------------------------------------------------------------------
-// beginCycle — arranca un ciclo de riego: primer pulso + canción configurada.
-// -----------------------------------------------------------------------------
-static void beginCycle() {
-  logf("[irrigation] inicio de ciclo");
+static void startPump() {
+  drv8833On();
   xEventGroupSetBits(evtSystem, EVT_IRRIGATING);
-
-  // Disparar la canción de riego (si el usuario configuró una en el dashboard).
-  RuntimeSettings st;
-  settings_get(st);
-  if (st.wateringSongIndex >= 0) {
-    int cmd = st.wateringSongIndex;
-    xQueueSend(qAudioCmd, &cmd, 0);
-  }
-
-  pumpOn();
-  s_pulseCount = 1;
-  enterState(IRR_PULSE_ON);
+  enterState(IRR_PUMPING);
+  logf("[irrigation] bomba ON (5 s)");
 }
 
-// -----------------------------------------------------------------------------
-// endCycle — termina el ciclo: bomba apagada, a COOLDOWN.
-// -----------------------------------------------------------------------------
-static void endCycle(const char* reason) {
-  logf("[irrigation] fin de ciclo (%s)", reason);
-  pumpOff();
+static void stopPump() {
+  drv8833Off();
   xEventGroupClearBits(evtSystem, EVT_IRRIGATING);
-  enterState(IRR_COOLDOWN);
+  enterState(IRR_WAITING);
+  logf("[irrigation] bomba OFF");
 }
 
-// =============================================================================
-// irrigation_init — configura el GPIO de la bomba (apagada).
-// =============================================================================
 bool irrigation_init() {
-  pinMode(PIN_PUMP, OUTPUT);
-  pumpOff();
+  pinMode(PIN_PUMP_IN1, OUTPUT);
+  drv8833Off();
+  // Arranca el temporizador desde ahora para que el primer riego automático
+  // ocurra después del primer intervalo completo, no inmediatamente.
+  s_lastCheckMs = millis();
   return true;
 }
 
-// =============================================================================
-// taskIrrigation — Período 250 ms. Procesa comandos manuales y corre la FSM.
-// =============================================================================
 void taskIrrigation(void* arg) {
-  TickType_t lastWake = xTaskGetTickCount();
-  const TickType_t period = pdMS_TO_TICKS(250);
   SensorData snap{};
 
   for (;;) {
-    // ---- Comandos manuales (botón del dashboard, MQTT) ----
+    // Comandos manuales del broker (no afectan el temporizador automático).
     IrrigationCmd cmd;
     while (xQueueReceive(qIrrigationCmd, &cmd, 0) == pdTRUE) {
-      if (cmd == IRR_CMD_MANUAL_START) {
-        // Riego manual: fuerza un ciclo aunque el sensor esté por encima del
-        // umbral (sólo si no hay uno en curso).
-        if (s_state == IRR_IDLE || s_state == IRR_COOLDOWN) {
-          beginCycle();
-        }
-      } else if (cmd == IRR_CMD_STOP) {
-        if (s_state == IRR_PULSE_ON || s_state == IRR_SETTLE) {
-          endCycle("stop manual");
-        }
+      if (cmd == IRR_CMD_MANUAL_START && s_state == IRR_WAITING) {
+        startPump();
       }
     }
 
-    bool     haveSnap = (xQueuePeek(qSensorData, &snap, 0) == pdTRUE);
-    uint32_t now      = millis();
-
-    // Umbral vigente (ajustable desde el dashboard).
     RuntimeSettings st;
     settings_get(st);
-    float threshold = st.soilThresholdPct;
+    uint32_t intervalMs = (uint32_t)(st.irrigationIntervalHrs * 3600000.0f);
+    uint32_t now = millis();
 
     switch (s_state) {
-      case IRR_IDLE:
-        // Sólo automatizamos si tenemos lectura válida y está por debajo.
-        if (haveSnap && snap.soilMoisturePct < threshold) {
-          beginCycle();
-        }
-        break;
-
-      case IRR_PULSE_ON:
-        // Mantener el pulso durante IRRIGATION_PULSE_MS y luego apagar.
-        if ((now - s_stateStartMs) >= IRRIGATION_PULSE_MS) {
-          pumpOff();
-          logf("[irrigation] pulso %u completado -> espera", s_pulseCount);
-          enterState(IRR_SETTLE);
-        }
-        break;
-
-      case IRR_SETTLE:
-        // Bomba apagada; dejar absorber el agua y re-medir tras la espera.
-        if ((now - s_stateStartMs) >= IRRIGATION_SETTLE_MS) {
-          if (haveSnap && snap.soilMoisturePct >= threshold) {
-            endCycle("umbral alcanzado");
-          } else if (s_pulseCount >= IRRIGATION_MAX_PULSES) {
-            endCycle("max pulsos");
+      case IRR_WAITING:
+        // ¿Ha vencido el intervalo?
+        if ((now - s_lastCheckMs) >= intervalMs) {
+          s_lastCheckMs = now;   // reiniciar temporizador pase lo que pase
+          // Solo regar si el sensor reporta humedad baja.
+          if (xQueuePeek(qSensorData, &snap, 0) == pdTRUE &&
+              snap.soilMoisturePct < st.soilThresholdLowPct) {
+            startPump();
           } else {
-            // Sigue seco: otro pulso.
-            pumpOn();
-            s_pulseCount++;
-            logf("[irrigation] aún seco (%.1f%% < %.1f%%) -> pulso %u",
-                 haveSnap ? snap.soilMoisturePct : -1.0f, threshold, s_pulseCount);
-            enterState(IRR_PULSE_ON);
+            logf("[irrigation] intervalo vencido, suelo OK (%.1f%% >= %.1f%%)",
+                 snap.soilMoisturePct, st.soilThresholdLowPct);
           }
         }
         break;
 
-      case IRR_COOLDOWN:
-        if ((now - s_stateStartMs) >= IRRIGATION_COOLDOWN_MS) {
-          enterState(IRR_IDLE);
-          logf("[irrigation] cooldown terminado");
+      case IRR_PUMPING:
+        if ((now - s_stateStart) >= IRRIGATION_PULSE_MS) {
+          stopPump();
         }
         break;
     }
 
-    vTaskDelayUntil(&lastWake, period);
+    vTaskDelay(pdMS_TO_TICKS(250));
   }
 }

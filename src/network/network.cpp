@@ -271,30 +271,54 @@ bool network_initWiFi() {
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// onMqttMessage — callback para los topics de comandos suscritos.
-// La Raspberry Pi publica "1"/"0" (texto). "1" / != 0 -> ejecutar; "0" -> stop.
+// onMqttMessage — callback de los comandos publicados por la Raspberry Pi.
+// El ESP se suscribe al comodín "matera/cmd/#" y despacha por topic exacto.
+// Los payloads son texto plano (sin JSON) para que el parseo sea trivial.
 // -----------------------------------------------------------------------------
 static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
-  char buf[32] = {0};
+  char buf[40] = {0};
   size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
   memcpy(buf, payload, n);
   logf("[mqtt] rx topic=%s payload=%s", topic, buf);
 
-  if (strcmp(topic, MQTT_TOPIC_CMD_PLAY) == 0) {
-    if (atoi(buf) != 0) {
-      // Reproducir la canción de riego configurada; si no hay, la primera de
-      // la SD (si existe alguna).
-      RuntimeSettings st;
-      settings_get(st);
-      int idx = (st.wateringSongIndex >= 0) ? st.wateringSongIndex
-                                            : (sd_songCount() > 0 ? 0 : -1);
-      if (idx >= 0) xQueueSend(qAudioCmd, &idx, 0);
-    }
-  } else if (strcmp(topic, MQTT_TOPIC_CMD_PUMP) == 0) {
-    IrrigationCmd cmd = (atoi(buf) != 0)
-        ? IRR_CMD_MANUAL_START
-        : IRR_CMD_STOP;
+  if (strcmp(topic, MQTT_TOPIC_CMD_PUMP) == 0) {
+    // "1" = regar ahora (ciclo manual); "0" = detener el ciclo en curso.
+    IrrigationCmd cmd = (atoi(buf) != 0) ? IRR_CMD_MANUAL_START : IRR_CMD_STOP;
     xQueueSend(qIrrigationCmd, &cmd, 0);
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_PLAY) == 0) {
+    // Reproducir la canción con el índice indicado.
+    int idx = atoi(buf);
+    if (idx >= 0 && idx < sd_songCount()) xQueueSend(qAudioCmd, &idx, 0);
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_STOP) == 0) {
+    int stop = AUDIO_CMD_STOP;
+    xQueueSend(qAudioCmd, &stop, 0);
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_VOLUME) == 0) {
+    int level = atoi(buf);
+    int cmd = AUDIO_VOL_CMD(level);
+    xQueueSend(qAudioCmd, &cmd, 0);   // la tarea de audio refleja el nivel en settings
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_THRESHOLD) == 0) {
+    settings_setThresholdLow((float)atof(buf));
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_IRR_INTERVAL) == 0) {
+    settings_setIrrigationInterval((float)atof(buf));
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_NEO_BRIGHT) == 0) {
+    int v = atoi(buf);
+    if (v < 0) v = 0; if (v > 255) v = 255;
+    settings_setBrightnessBoth((uint8_t)v);
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_NEO_PATTERN) == 0) {
+    settings_setNeoPattern(buf);
+
+  } else if (strcmp(topic, MQTT_TOPIC_CMD_NEO_COLOR) == 0) {
+    // "RRGGBB" hexadecimal (acepta un '#' inicial opcional).
+    const char* p = (buf[0] == '#') ? buf + 1 : buf;
+    long rgb = strtol(p, nullptr, 16);
+    settings_setNeoColor((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
   }
 }
 
@@ -307,11 +331,13 @@ static bool mqttReconnect() {
 
   bool ok = s_mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
   if (ok) {
-    s_mqtt.subscribe(MQTT_TOPIC_CMD_PUMP);
-    s_mqtt.subscribe(MQTT_TOPIC_CMD_PLAY);
+    // Un único comodín cubre todos los comandos de la Raspi.
+    s_mqtt.subscribe(MQTT_TOPIC_CMD_WILDCARD);
     xEventGroupSetBits(evtSystem, EVT_MQTT_CONNECTED);
-    logf("[mqtt] conectado a HiveMQ. sub: %s , %s",
-         MQTT_TOPIC_CMD_PUMP, MQTT_TOPIC_CMD_PLAY);
+    // Publicar el estado/catálogo apenas conectamos, para que la Raspi pueble
+    // su dashboard (canciones, volumen, umbral, patrón, etc.).
+    xEventGroupSetBits(evtSystem, EVT_STATE_DIRTY);
+    logf("[mqtt] conectado a HiveMQ. sub: %s", MQTT_TOPIC_CMD_WILDCARD);
   } else {
     xEventGroupClearBits(evtSystem, EVT_MQTT_CONNECTED);
     logf("[mqtt] connect FAILED rc=%d", s_mqtt.state());
@@ -336,6 +362,72 @@ static void publishSensors(const SensorData& s) {
   logf("[mqtt] pub %s -> %s", MQTT_TOPIC_SENSORS, payload);
 }
 
+// -----------------------------------------------------------------------------
+// jsonEscape — escapa comillas/barras de un nombre de archivo para JSON.
+// -----------------------------------------------------------------------------
+static void jsonEscapeInto(String& out, const char* s) {
+  for (const char* p = s; *p; ++p) {
+    if (*p == '"' || *p == '\\') out += '\\';
+    out += *p;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// publishState — publica el estado/catálogo como JSON RETENIDO en
+// MQTT_TOPIC_STATE: lista de canciones de la SD, canción de riego, volumen,
+// umbral, brillo/patrón/color de los NeoPixel y la lista de patrones soportados.
+// Retenido para que la Raspi reciba el snapshot apenas se suscribe.
+// -----------------------------------------------------------------------------
+static void publishState() {
+  RuntimeSettings st;
+  settings_get(st);
+
+  String out;
+  out.reserve(900);
+  out += "{\"songs\":[";
+  int n = sd_songCount();
+  for (int i = 0; i < n; ++i) {
+    if (i) out += ',';
+    out += '"';
+    jsonEscapeInto(out, sd_songName(i));
+    out += '"';
+  }
+  out += "],";
+  out += "\"volume\":" + String(st.audioVolume) + ",";
+  out += "\"volumeMax\":" + String(AUDIO_VOLUME_MAX) + ",";
+  out += "\"thresholdLow\":" + String(st.soilThresholdLowPct, 1) + ",";
+  out += "\"irrigationInterval\":" + String(st.irrigationIntervalHrs, 1) + ",";
+  out += "\"neoBright\":" + String(st.neoBrightness1) + ",";
+  out += "\"neoBright2\":" + String(st.neoBrightness2) + ",";
+  out += "\"neoPattern\":\"" + String(st.neoPattern) + "\",";
+  char color[8];
+  snprintf(color, sizeof(color), "%02X%02X%02X", st.neoR, st.neoG, st.neoB);
+  out += "\"neoColor\":\"" + String(color) + "\",";
+  out += "\"patterns\":[";
+  // NEO_PATTERNS_CSV -> array JSON.
+  const char* csv = NEO_PATTERNS_CSV;
+  bool first = true;
+  String tok;
+  for (const char* p = csv; ; ++p) {
+    if (*p == ',' || *p == '\0') {
+      if (tok.length()) {
+        if (!first) out += ',';
+        out += '"'; out += tok; out += '"';
+        first = false;
+        tok = "";
+      }
+      if (*p == '\0') break;
+    } else {
+      tok += *p;
+    }
+  }
+  out += "]}";
+
+  s_mqtt.publish(MQTT_TOPIC_STATE, out.c_str(), /*retained=*/true);
+  logf("[mqtt] pub %s (retained, %u bytes)", MQTT_TOPIC_STATE,
+       (unsigned)out.length());
+}
+
 // =============================================================================
 // taskMQTT — mantiene la conexión, publica cada MQTT_PUBLISH_PERIOD_MS y
 // procesa subs entrantes. Período de loop 200 ms (necesario para PubSubClient).
@@ -344,7 +436,8 @@ void taskMQTT(void* arg) {
   s_tls.setCACert(HIVEMQ_ROOT_CA);   // validar el certificado de HiveMQ Cloud
   s_mqtt.setServer(MQTT_HOST, MQTT_PORT);
   s_mqtt.setCallback(onMqttMessage);
-  s_mqtt.setBufferSize(512);
+  // Buffer amplio: el JSON de estado (catálogo de canciones) puede ser grande.
+  s_mqtt.setBufferSize(2048);
 
   TickType_t lastWake = xTaskGetTickCount();
   const TickType_t loopPeriod = pdMS_TO_TICKS(200);
@@ -361,6 +454,13 @@ void taskMQTT(void* arg) {
       xEventGroupSetBits(evtSystem, EVT_WIFI_CONNECTED);
       if (!s_mqtt.connected()) mqttReconnect();
       s_mqtt.loop();
+
+      // Republicar el estado retenido cuando algún ajuste cambió (lo marca
+      // cualquier setter de settings, o la reconexión MQTT).
+      if (s_mqtt.connected() &&
+          (xEventGroupClearBits(evtSystem, EVT_STATE_DIRTY) & EVT_STATE_DIRTY)) {
+        publishState();
+      }
 
       uint32_t now = millis();
       if (s_mqtt.connected() &&

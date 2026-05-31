@@ -32,12 +32,11 @@
 #define SOIL_RAW_DRY          3000  // ADC al aire (suelo seco)
 #define SOIL_RAW_WET          1500  // ADC sumergido en agua
 
-// -------- Actuadores: bomba --------------------------------------------------
-// El test maneja la bomba a través de un optoacoplador en colector común:
-// la lógica está INVERTIDA (LOW = encendido, HIGH = apagado). Si tu hardware
-// usa un MOSFET directo (HIGH = encendido), poné PUMP_ACTIVE_LOW en 0.
-#define PIN_PUMP              10   // "PIN_BOMBA" en el test
-#define PUMP_ACTIVE_LOW       1    // 1 = optoacoplador (LOW enciende)
+// -------- Actuadores: bomba (driver DRV8833) ---------------------------------
+// IN2 está cableado directo a GND → control de un solo pin:
+//   IN1=HIGH → bomba encendida   (IN1 HIGH, IN2 GND = sentido directo)
+//   IN1=LOW  → bomba apagada     (IN1 LOW,  IN2 GND = rueda libre)
+#define PIN_PUMP_IN1          10
 
 // -------- Servo de rotación continua 360° (LEDC, no ESP32Servo) --------------
 // Valores de pulso calibrados para 14 bits a 50 Hz (periodo = 20 ms), iguales
@@ -59,6 +58,15 @@
 #define PIN_NEOPIXEL_2        20    // "PIN_NEO_2" en el test
 #define NEOPIXEL_COUNT        8
 #define NEOPIXEL_BRIGHTNESS   40    // 0..255, brillo inicial de ambos anillos
+
+// Patrones disponibles (guardados en el ESP). El dashboard remoto sólo envía el
+// NOMBRE del patrón por MQTT y el ESP decide cómo renderizarlo (ver leds.cpp).
+// La lista se publica en MQTT_TOPIC_STATE para poblar el selector de la Raspi.
+#define NEO_PATTERNS_CSV      "rainbow,solid,off,breathe,comet"
+#define NEO_PATTERN_DEFAULT   "rainbow"
+#define NEO_COLOR_R_DEFAULT   255    // color inicial para patrones de color sólido
+#define NEO_COLOR_G_DEFAULT   120
+#define NEO_COLOR_B_DEFAULT   0
 
 // -------- Audio I2S (MAX98357A) + microSD (MP3 con ESP8266Audio) -------------
 #define PIN_I2S_BCLK          35
@@ -92,21 +100,16 @@
 #define TFT_ROTATION          2           // 0..3; ajustar si el texto sale al revés
 #define DISPLAY_PAGE_PERIOD_MS 4000        // rotación de pantallas
 
-// -------- Lógica de riego por pulsos ----------------------------------------
-// Para evitar sobre-riego (el sensor puede no reflejar el cambio al instante)
-// NO se mantiene la bomba encendida hasta alcanzar un objetivo. En su lugar:
-//   1. Si la humedad < umbral -> pulso de bomba IRRIGATION_PULSE_MS.
-//   2. Apagar la bomba y esperar IRRIGATION_SETTLE_MS para que el agua se
-//      absorba y el sensor se estabilice.
-//   3. Re-medir: si sigue por debajo del umbral, repetir el pulso; si ya está
-//      por encima, terminar y entrar en cooldown.
-// El umbral es ajustable en caliente desde el dashboard (ver settings.h); el
-// valor de abajo es sólo el inicial.
-#define SOIL_MOISTURE_TRIGGER_PCT  35.0f   // umbral inicial: por debajo -> regar
-#define IRRIGATION_PULSE_MS        3500    // duración de cada pulso de bomba (3-4 s)
-#define IRRIGATION_SETTLE_MS       10000   // espera tras el pulso para re-medir
-#define IRRIGATION_MAX_PULSES      6       // tope de pulsos por ciclo (seguridad)
-#define IRRIGATION_COOLDOWN_MS     30000   // tiempo mínimo entre ciclos de riego
+// -------- Lógica de riego por intervalo + umbral ----------------------------
+// El riego solo ocurre cuando se cumplen DOS condiciones simultáneas:
+//   1. Ha transcurrido IRRIGATION_INTERVAL_HRS_DEFAULT horas desde el último
+//      ciclo (o desde el arranque). El intervalo es ajustable en caliente.
+//   2. La humedad del suelo está por debajo de SOIL_MOISTURE_THRESHOLD_LOW_PCT.
+// Si la condición 2 no se cumple en ese instante, se espera al siguiente
+// intervalo. El ciclo de bomba dura exactamente IRRIGATION_PULSE_MS.
+#define SOIL_MOISTURE_THRESHOLD_LOW_PCT   35.0f      // % umbral de arranque
+#define IRRIGATION_INTERVAL_HRS_DEFAULT   24.0f      // intervalo inicial (horas)
+#define IRRIGATION_PULSE_MS               5000UL     // duración del pulso de bomba
 
 // -------- Conectividad: WiFi (aprovisionamiento por portal cautivo) ---------
 // Las credenciales NO están hardcodeadas. Al primer boot (o si las guardadas
@@ -141,9 +144,20 @@
 #define MQTT_CLIENT_ID       "matera-esp32"       // único por cliente conectado
 
 // Topics (deben coincidir con los de la Raspberry Pi):
-#define MQTT_TOPIC_SENSORS   "matera/sensors"     // ESP -> publica datos (JSON)
-#define MQTT_TOPIC_CMD_PUMP  "matera/cmd/pump"    // Raspi -> "1"=regar, "0"=stop
-#define MQTT_TOPIC_CMD_PLAY  "matera/cmd/play"    // Raspi -> "1"=reproducir
+//   ESP -> publica
+#define MQTT_TOPIC_SENSORS   "matera/sensors"     // datos de sensores (JSON), c/5s
+#define MQTT_TOPIC_STATE     "matera/state"       // estado/catálogo (JSON, RETAINED)
+//   Raspi -> publica (el ESP se suscribe al comodín "matera/cmd/#")
+#define MQTT_TOPIC_CMD_WILDCARD     "matera/cmd/#"
+#define MQTT_TOPIC_CMD_PUMP         "matera/cmd/pump"        // "1"=regar ahora, "0"=stop
+#define MQTT_TOPIC_CMD_PLAY         "matera/cmd/play"        // índice de canción a reproducir
+#define MQTT_TOPIC_CMD_STOP         "matera/cmd/stop"        // detener audio (cualquier payload)
+#define MQTT_TOPIC_CMD_VOLUME       "matera/cmd/volume"      // nivel 0..AUDIO_VOLUME_MAX
+#define MQTT_TOPIC_CMD_THRESHOLD    "matera/cmd/threshold"      // float -> umbral de humedad (%)
+#define MQTT_TOPIC_CMD_IRR_INTERVAL "matera/cmd/irr_interval"   // float -> intervalo de riego (horas)
+#define MQTT_TOPIC_CMD_NEO_BRIGHT   "matera/cmd/neo/bright"     // 0..255 (ambos anillos)
+#define MQTT_TOPIC_CMD_NEO_PATTERN  "matera/cmd/neo/pattern"    // nombre del patrón
+#define MQTT_TOPIC_CMD_NEO_COLOR    "matera/cmd/neo/color"      // color "RRGGBB" (hex)
 
 // Período entre publicaciones de sensores (HiveMQ no impone rate limit).
 #define MQTT_PUBLISH_PERIOD_MS     5000
